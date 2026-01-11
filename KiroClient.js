@@ -101,68 +101,95 @@ class KiroClient {
         let fullContent = '';
         let meteringData = null;
         let contextUsage = null;
+        let rawBuffer = Buffer.alloc(0);
 
         response.data.on('data', (chunk) => {
-          const lines = chunk.toString().split('\n');
-
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            // 解析 SSE 事件
-            if (line.startsWith(':event-type...assistantResponseEvent')) {
-              // 下一行可能是 content-type，再下一行是数据
-              const dataLine = lines[i + 2];
-              if (dataLine && dataLine.startsWith('{')) {
-                try {
-                  const data = JSON.parse(dataLine);
-                  if (data.content) {
-                    fullContent += data.content;
-                    if (onChunk) {
-                      onChunk({
-                        type: 'content',
-                        data: data.content
-                      });
-                    }
-                  }
-                } catch (e) {
-                  // 忽略解析错误
+          // 累积原始 Buffer
+          rawBuffer = Buffer.concat([rawBuffer, chunk]);
+          
+          // 转换为字符串
+          const str = rawBuffer.toString('utf8');
+          
+          // 使用正则表达式查找所有 JSON 对象
+          const jsonRegex = /\{"[^"]+":"[^"]*"\}/g;
+          let match;
+          let lastIndex = 0;
+          
+          while ((match = jsonRegex.exec(str)) !== null) {
+            lastIndex = jsonRegex.lastIndex;
+            
+            try {
+              const data = JSON.parse(match[0]);
+              
+              // 内容块
+              if (data.content !== undefined) {
+                fullContent += data.content;
+                if (onChunk) {
+                  onChunk({
+                    type: 'content',
+                    data: data.content
+                  });
                 }
               }
-            } else if (line.startsWith(':event-type...meteringEvent')) {
-              const dataLine = lines[i + 2];
-              if (dataLine && dataLine.startsWith('{')) {
-                try {
-                  meteringData = JSON.parse(dataLine);
-                  if (onChunk) {
-                    onChunk({
-                      type: 'metering',
-                      data: meteringData
-                    });
-                  }
-                } catch (e) {
-                  // 忽略解析错误
+              
+              // 费用信息
+              if (data.usage !== undefined) {
+                meteringData = data;
+                if (onChunk) {
+                  onChunk({
+                    type: 'metering',
+                    data: meteringData
+                  });
                 }
               }
-            } else if (line.startsWith(':event-type...contextUsageEvent')) {
-              const dataLine = lines[i + 2];
-              if (dataLine && dataLine.startsWith('{')) {
-                try {
-                  contextUsage = JSON.parse(dataLine);
-                  if (onChunk) {
-                    onChunk({
-                      type: 'contextUsage',
-                      data: contextUsage
-                    });
-                  }
-                } catch (e) {
-                  // 忽略解析错误
+              
+              // 上下文使用率
+              if (data.contextUsagePercentage !== undefined) {
+                contextUsage = data;
+                if (onChunk) {
+                  onChunk({
+                    type: 'contextUsage',
+                    data: contextUsage
+                  });
                 }
               }
+            } catch (e) {
+              // JSON 解析失败，忽略
             }
+          }
+          
+          // 保留未处理的部分（可能是不完整的 JSON）
+          if (lastIndex > 0) {
+            rawBuffer = Buffer.from(str.substring(lastIndex), 'utf8');
           }
         });
 
         response.data.on('end', () => {
+          // 处理剩余的缓冲区
+          if (rawBuffer.length > 0) {
+            const str = rawBuffer.toString('utf8');
+            const jsonRegex = /\{[^}]+\}/g;
+            let match;
+            
+            while ((match = jsonRegex.exec(str)) !== null) {
+              try {
+                const data = JSON.parse(match[0]);
+                
+                if (data.content !== undefined) {
+                  fullContent += data.content;
+                }
+                if (data.usage !== undefined) {
+                  meteringData = data;
+                }
+                if (data.contextUsagePercentage !== undefined) {
+                  contextUsage = data;
+                }
+              } catch (e) {
+                // 忽略
+              }
+            }
+          }
+          
           resolve({
             content: fullContent,
             metering: meteringData,
@@ -180,247 +207,7 @@ class KiroClient {
   }
 
   /**
-   * 意图分类系统提示词
-   */
-  _getIntentClassificationPrompt(userMessage) {
-    return `
-You are an intent classifier for a language model.
-
-Your job is to classify the user's intent based on their conversation history into one of two main categories:
-
-1. **Do mode** (default for most requests)
-2. **Spec mode** (only for specific specification/planning requests)
-
-Return ONLY a JSON object with 3 properties (chat, do, spec) representing your confidence in each category. The values must always sum to 1.
-
-### Category Definitions
-
-#### 1. Do mode (DEFAULT CHOICE)
-Input belongs in do mode if it:
-- Is NOT explicitly about creating or working with specifications
-- Requests modifications to code or the workspace
-- Is an imperative sentence asking for action
-- Starts with a base-form verb (e.g., "Write," "Create," "Generate")
-- Has an implied subject ("you" is understood)
-- Requests to run commands or make changes to files
-- Asks for information, explanation, or clarification
-- Ends with a question mark (?)
-- Seeks information or explanation
-- Examples include:
-  - "Write a function to reverse a string."
-  - "Create a new file called index.js."
-  - "What is the capital of France?"
-  - "How do promises work in JavaScript?"
-
-#### 2. Spec mode (ONLY for specification requests)
-Input belongs in spec mode ONLY if it EXPLICITLY:
-- Asks to create a specification (or spec)
-- Uses the word "spec" or "specification" to request creating a formal spec
-- Mentions creating a formal requirements document
-- Examples include:
-  - "Create a spec for this feature"
-  - "Generate a specification for the login system"
-
-IMPORTANT: When in doubt, classify as "Do" mode. Only classify as "Spec" when the user is explicitly requesting to create or work with a formal specification document.
-
-IMPORTANT: Respond ONLY with a raw JSON object. No explanation, no commentary, no additional text, no markdown formatting, no code fences (\`\`\`), no backticks.
-
-Example response (exactly this format):
-{"chat": 0.0, "do": 0.9, "spec": 0.1}
-
-Here is the last user message:
-${userMessage}`;
-  }
-
-  /**
-   * 意图分类请求
-   * @param {string} message - 用户消息
-   * @param {object} options - 可选参数
-   * @returns {Promise<object>} 分类结果 {chat: 0.0, do: 1.0, spec: 0.0}
-   */
-  async classifyIntent(message, options = {}) {
-    const agentContinuationId = uuidv4();
-    const conversationState = {
-      agentContinuationId: agentContinuationId,
-      agentTaskType: 'vibe',
-      chatTriggerType: 'MANUAL',
-      conversationId: options.conversationId || uuidv4(),
-      currentMessage: {
-        userInputMessage: {
-          content: message,
-          modelId: 'simple-task',
-          origin: 'AI_EDITOR',
-          userInputMessageContext: {}
-        }
-      },
-      history: [
-        {
-          userInputMessage: {
-            content: this._getIntentClassificationPrompt(message),
-            modelId: 'simple-task',
-            origin: 'AI_EDITOR'
-          }
-        },
-        {
-          assistantResponseMessage: {
-            content: 'I will follow these instructions',
-            toolUses: []
-          }
-        }
-      ]
-    };
-
-    try {
-      const response = await this.client.post('/generateAssistantResponse',
-        { conversationState },
-        {
-          headers: this._getHeaders({
-            'Content-Type': 'application/json',
-            'x-amzn-kiro-agent-mode': 'intent-classification',
-            'x-amzn-codewhisperer-optout': 'true'
-          }),
-          responseType: 'stream'
-        }
-      );
-
-      return new Promise((resolve, reject) => {
-        let fullContent = '';
-
-        response.data.on('data', (chunk) => {
-          const lines = chunk.toString().split('\n');
-
-          for (let i = 0; i < lines.length; i++) {
-            const line = lines[i];
-
-            if (line.startsWith(':event-type') && line.includes('assistantResponseEvent')) {
-              const dataLine = lines[i + 2];
-              if (dataLine && dataLine.startsWith('{')) {
-                try {
-                  const data = JSON.parse(dataLine);
-                  if (data.content) {
-                    fullContent += data.content;
-                  }
-                } catch (e) {
-                  // 忽略解析错误
-                }
-              }
-            }
-          }
-        });
-
-        response.data.on('end', () => {
-          try {
-            // 尝试解析 JSON 响应
-            // 响应格式可能是: {"chat": 1.0, "do": 0.0, "spec": 0.0}
-            // 或流式片段: {\  chat\  : 1  .0, \  do\  : 0  .0, \  spec\  : 0  .0}
-
-            // 清理转义字符
-            let cleaned = fullContent.replace(/\\/g, '');
-
-            // 尝试直接解析
-            try {
-              const result = JSON.parse(cleaned);
-              if (result.chat !== undefined && result.do !== undefined && result.spec !== undefined) {
-                resolve(result);
-                return;
-              }
-            } catch (e) {
-              // 如果直接解析失败，尝试从文本中提取数字
-            }
-
-            // 从文本中提取数值
-            const chatMatch = fullContent.match(/chat["\s:]*([0-9.]+)/i);
-            const doMatch = fullContent.match(/do["\s:]*([0-9.]+)/i);
-            const specMatch = fullContent.match(/spec["\s:]*([0-9.]+)/i);
-
-            if (chatMatch && doMatch && specMatch) {
-              resolve({
-                chat: parseFloat(chatMatch[1]),
-                do: parseFloat(doMatch[1]),
-                spec: parseFloat(specMatch[1])
-              });
-            } else {
-              // 如果无法解析，返回默认值（chat模式）
-              console.warn('无法解析意图分类结果，使用默认值');
-              resolve({ chat: 1.0, do: 0.0, spec: 0.0 });
-            }
-          } catch (error) {
-            console.warn('解析意图分类响应失败:', error.message);
-            resolve({ chat: 1.0, do: 0.0, spec: 0.0 });
-          }
-        });
-
-        response.data.on('error', (error) => {
-          reject(this._handleError(error));
-        });
-      });
-    } catch (error) {
-      throw this._handleError(error);
-    }
-  }
-
-  /**
-   * 根据意图分类结果选择 agent 模式
-   * @param {object} intent - 意图分类结果
-   * @returns {string} agent 模式
-   */
-  _selectAgentMode(intent) {
-    if (intent.spec > 0.5) {
-      return 'spec-creation';
-    } else if (intent.do > 0.5) {
-      return 'task-execution';
-    } else {
-      return 'vibe'; // chat 模式
-    }
-  }
-
-  /**
-   * 根据意图分类结果选择模型
-   * @param {object} intent - 意图分类结果
-   * @returns {string} 模型 ID
-   */
-  _selectModel(intent) {
-    if (intent.chat > 0.8) {
-      // 纯聊天可以使用较小的模型
-      return 'claude-haiku-4.5';
-    } else {
-      // 需要执行任务或创建规范，使用更强大的模型
-      return 'claude-sonnet-4.5';
-    }
-  }
-
-  /**
-   * 两步式对话：先进行意图分类，再发送主对话
-   * @param {string} message - 用户消息
-   * @param {object} options - 可选参数
-   * @returns {Promise<object>} 响应结果
-   */
-  async chatWithIntent(message, options = {}) {
-    // 步骤 1: 意图分类
-    if (options.onIntentClassified) {
-      options.onIntentClassified({ status: 'classifying' });
-    }
-
-    const intent = await this.classifyIntent(message, options);
-
-    if (options.onIntentClassified) {
-      options.onIntentClassified({ status: 'classified', intent });
-    }
-
-    // 步骤 2: 根据意图选择模式和模型
-    const agentTaskType = options.agentTaskType || this._selectAgentMode(intent);
-    const modelId = options.modelId || this._selectModel(intent);
-
-    // 步骤 3: 发送主对话
-    return this.chat(message, {
-      ...options,
-      agentTaskType,
-      modelId
-    });
-  }
-
-  /**
-   * 简化版：发送消息并获取回复（单步，不进行意图分类）
+   * 发送消息并获取回复
    * @param {string} message - 用户消息
    * @param {object} options - 可选参数
    * @returns {Promise<object>} 响应结果
@@ -433,7 +220,7 @@ ${userMessage}`;
       currentMessage: {
         userInputMessage: {
           content: message,
-          modelId: options.modelId || 'simple-task',
+          modelId: options.modelId || 'claude-sonnet-4.5',
           origin: options.origin || 'AI_EDITOR',
           userInputMessageContext: options.context || {}
         }
@@ -466,15 +253,35 @@ ${userMessage}`;
    * 错误处理
    */
   _handleError(error) {
+    // 提取关键信息，避免循环引用
     if (error.response) {
       // 服务器返回错误响应
-      return new Error(`API Error ${error.response.status}: ${JSON.stringify(error.response.data)}`);
+      const status = error.response.status;
+      const statusText = error.response.statusText || '';
+      const data = error.response.data;
+      
+      // 安全地序列化响应数据
+      let dataStr = '';
+      try {
+        if (typeof data === 'string') {
+          dataStr = data;
+        } else if (data && typeof data === 'object') {
+          dataStr = JSON.stringify(data);
+        } else {
+          dataStr = String(data);
+        }
+      } catch (e) {
+        dataStr = '[无法序列化响应数据]';
+      }
+      
+      return new Error(`API Error ${status} ${statusText}: ${dataStr}`);
     } else if (error.request) {
       // 请求发出但没有收到响应
-      return new Error('Network Error: No response received from API');
+      // 不要尝试序列化 request 对象，它包含循环引用
+      return new Error(`Network Error: No response received from API (${error.message || '未知错误'})`);
     } else {
       // 其他错误
-      return new Error(`Request Error: ${error.message}`);
+      return new Error(`Request Error: ${error.message || '未知错误'}`);
     }
   }
 

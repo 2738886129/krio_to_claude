@@ -10,7 +10,7 @@ const KiroClient = require("./KiroClient");
 
 // ========== 配置 ==========
 const BEARER_TOKEN =
-  "aoaAAAAAGljCYEtxb5CGcKFY3CFUZOshJPv8mw47Ed_l4DmN21A4MIn6u2vzgr92SUiMhZL3jCGoScSRVBW32gDFIBkc0:MGQCMHiZn7uL49yBAZBg6zqQLSM5X/1PoZX09f1W5twbtbDaWJefiR7udFdOm7z98gH5YwIwQrDO7COCh7EiE8lOmfFxwLvp77sudv5NjAHAjJCfFNhJJJMqoEMsF2rmJfNSBcTv"; // 替换为真实的 token
+  "aoaAAAAAGljIR8jukm5NvO0Qz2IbRztsjy3xmc9cgB2fezRN4V--AG5IJENI-oMVUeuc4TB6TMownVuT3QC9DIVlcBkc0:MGYCMQD84NJZOqfD4nGjFR5YiD+MhnOuY9iV3uKVcjjJPgr4QoHIEjRITm6x5+RFpJ7ieyUCMQDdKBto6DPt5GV9dm2fi7qiWxrRMqxRujPlil0nxOhcfrcePDv6CEDX/Aq7E9lgqaY"; // 替换为真实的 token
 
 // ========== 初始化客户端 ==========
 const client = new KiroClient(BEARER_TOKEN);
@@ -85,27 +85,29 @@ async function example3_simpleChat() {
   console.log("\n========== 示例 3: 简单对话 ==========");
   try {
     console.log('发送消息: "你好"');
+    console.log('配置: modelId=claude-sonnet-4.5, agentTaskType=vibe\n');
 
     const result = await client.chat("你好", {
-      modelId: "simple-task",
+      modelId: "claude-sonnet-4.5",
+      agentTaskType: "vibe",
       onChunk: (chunk) => {
         if (chunk.type === "content") {
           process.stdout.write(chunk.data);
+        } else if (chunk.type === "metering") {
+          console.log("\n[收到费用信息]", chunk.data);
+        } else if (chunk.type === "contextUsage") {
+          console.log("\n[收到上下文信息]", chunk.data);
         }
       },
     });
 
-    console.log(
-      "\n\n费用:",
-      result.metering?.usage,
-      result.metering?.unitPlural
-    );
-    console.log(
-      "上下文使用:",
-      result.contextUsage?.contextUsagePercentage?.toFixed(2) + "%"
-    );
+    console.log("\n\n[最终结果]");
+    console.log("内容长度:", result.content?.length || 0);
+    console.log("费用:", result.metering?.usage, result.metering?.unitPlural);
+    console.log("上下文使用:", result.contextUsage?.contextUsagePercentage?.toFixed(2) + "%");
   } catch (error) {
     console.error("错误:", error.message);
+    console.error("完整错误:", error);
   }
 }
 
@@ -114,13 +116,17 @@ async function example4_differentModels() {
   console.log("\n========== 示例 4: 使用不同模型 ==========");
 
   const message = "写一个 Python 函数计算斐波那契数列";
-  const models = ["simple-task", "claude-haiku-4.5", "claude-sonnet-4.5"];
+  const configs = [
+    { modelId: "simple-task", agentTaskType: "task-execution" },
+    { modelId: "claude-haiku-4.5", agentTaskType: "task-execution" },
+    { modelId: "claude-sonnet-4.5", agentTaskType: "task-execution" }
+  ];
 
-  for (const modelId of models) {
-    console.log(`\n--- 使用模型: ${modelId} ---`);
+  for (const config of configs) {
+    console.log(`\n--- 模型: ${config.modelId} ---`);
     try {
       const result = await client.chat(message, {
-        modelId: modelId,
+        ...config,
         onChunk: (chunk) => {
           if (chunk.type === "content") {
             process.stdout.write(chunk.data);
@@ -157,6 +163,7 @@ async function example5_multiTurnConversation() {
         conversationId: conversationId,
         history: history,
         modelId: "claude-sonnet-4.5",
+        agentTaskType: "vibe",
         onChunk: (chunk) => {
           if (chunk.type === "content") {
             process.stdout.write(chunk.data);
@@ -189,48 +196,39 @@ async function example6_getRemainingCredits() {
   }
 }
 
-// ========== 示例 7: 两步式对话（带意图分类）==========
+// ========== 示例 7: 不同任务类型 ==========
 async function example7_chatWithIntent() {
-  console.log("\n========== 示例 7: 两步式对话（带意图分类）==========");
+  console.log("\n========== 示例 7: 不同任务类型 ==========");
 
-  const testMessages = [
-    "你好，今天天气怎么样？", // 预期: chat 模式
-    "帮我写一个计算斐波那契数列的函数", // 预期: do 模式
-    "创建一个用户登录功能的规范", // 预期: spec 模式
+  const testCases = [
+    {
+      message: "你好，今天天气怎么样？",
+      agentTaskType: "vibe",
+      modelId: "claude-haiku-4.5"
+    },
+    {
+      message: "帮我写一个计算斐波那契数列的函数",
+      agentTaskType: "task-execution",
+      modelId: "claude-sonnet-4.5"
+    },
+    {
+      message: "创建一个用户登录功能的规范",
+      agentTaskType: "spec-creation",
+      modelId: "claude-sonnet-4.5"
+    }
   ];
 
-  for (const message of testMessages) {
+  for (const testCase of testCases) {
     console.log(`\n${"=".repeat(60)}`);
-    console.log(`用户消息: "${message}"`);
+    console.log(`用户消息: "${testCase.message}"`);
+    console.log(`任务类型: ${testCase.agentTaskType}`);
+    console.log(`模型: ${testCase.modelId}`);
     console.log("=".repeat(60));
 
     try {
-      const result = await client.chatWithIntent(message, {
-        onIntentClassified: ({ status, intent }) => {
-          if (status === "classifying") {
-            console.log("\n[步骤 1] 正在分类用户意图...");
-          } else if (status === "classified") {
-            console.log(`[步骤 1] 意图分类完成:`);
-            console.log(`  - Chat (聊天): ${(intent.chat * 100).toFixed(1)}%`);
-            console.log(`  - Do (执行任务): ${(intent.do * 100).toFixed(1)}%`);
-            console.log(
-              `  - Spec (创建规范): ${(intent.spec * 100).toFixed(1)}%`
-            );
-
-            // 显示选择的模式和模型
-            const mode =
-              intent.spec > 0.5
-                ? "spec-creation"
-                : intent.do > 0.5
-                ? "task-execution"
-                : "vibe";
-            const model =
-              intent.chat > 0.8 ? "claude-haiku-4.5" : "claude-sonnet-4.5";
-            console.log(`  → 选择模式: ${mode}`);
-            console.log(`  → 选择模型: ${model}`);
-            console.log("\n[步骤 2] 发送主对话请求...");
-          }
-        },
+      const result = await client.chat(testCase.message, {
+        agentTaskType: testCase.agentTaskType,
+        modelId: testCase.modelId,
         onChunk: (chunk) => {
           if (chunk.type === "content") {
             process.stdout.write(chunk.data);
@@ -252,16 +250,15 @@ async function example7_chatWithIntent() {
   }
 }
 
-// ========== 示例 8: 对比单步与两步式对话 ==========
+// ========== 示例 8: 对比不同配置 ==========
 async function example8_compareApproaches() {
-  console.log("\n========== 示例 8: 对比单步与两步式对话 ==========");
+  console.log("\n========== 示例 8: 对比不同配置 ==========");
 
   const message = "JavaScript 中的闭包是什么？";
 
-  // 方法 1: 单步式（直接调用，手动指定参数）
-  console.log("\n--- 方法 1: 单步式对话 ---");
-  console.log(`消息: "${message}"`);
-  console.log("手动指定: agentTaskType=vibe, modelId=simple-task\n");
+  // 配置 1: 使用简单模型
+  console.log("\n--- 配置 1: simple-task + vibe ---");
+  console.log(`消息: "${message}"\n`);
 
   try {
     const result1 = await client.chat(message, {
@@ -278,35 +275,21 @@ async function example8_compareApproaches() {
     console.error("错误:", error.message);
   }
 
-  // 方法 2: 两步式（先分类意图，自动选择参数）
-  console.log("\n--- 方法 2: 两步式对话（智能选择）---");
-  console.log(`消息: "${message}"`);
+  // 配置 2: 使用强大模型
+  console.log("\n--- 配置 2: claude-sonnet-4.5 + vibe ---");
+  console.log(`消息: "${message}"\n`);
 
   try {
-    const result2 = await client.chatWithIntent(message, {
-      onIntentClassified: ({ status, intent }) => {
-        if (status === "classified") {
-          console.log(
-            `意图: chat=${intent.chat}, do=${intent.do}, spec=${intent.spec}`
-          );
-          const mode =
-            intent.spec > 0.5
-              ? "spec-creation"
-              : intent.do > 0.5
-              ? "task-execution"
-              : "vibe";
-          const model =
-            intent.chat > 0.8 ? "claude-haiku-4.5" : "claude-sonnet-4.5";
-          console.log(`自动选择: agentTaskType=${mode}, modelId=${model}\n`);
-        }
-      },
+    const result2 = await client.chat(message, {
+      agentTaskType: "vibe",
+      modelId: "claude-sonnet-4.5",
       onChunk: (chunk) => {
         if (chunk.type === "content") {
           process.stdout.write(chunk.data);
         }
       },
     });
-    console.log(`\n\n总费用: ${result2.metering?.usage} credits`);
+    console.log(`\n\n费用: ${result2.metering?.usage} credits`);
   } catch (error) {
     console.error("错误:", error.message);
   }
@@ -317,26 +300,26 @@ async function main() {
   console.log("🚀 Kiro API 客户端示例");
   console.log("=".repeat(50));
 
-  // 检查 token
-  if (BEARER_TOKEN === "YOUR_BEARER_TOKEN_HERE") {
-    console.error("\n❌ 错误: 请先配置 Bearer Token!");
-    console.log("\n获取 Token 的方法:");
-    console.log("1. 使用 mitmproxy 捕获 Kiro 应用的网络流量");
-    console.log("2. 从 Authorization 头中提取 Bearer Token");
-    console.log("3. 将 token 填入本文件的 BEARER_TOKEN 变量");
+  // 验证 Token
+  try {
+    const usage = await client.getUsageLimits();
+    console.log("\n✅ Token 验证成功");
+    console.log(`订阅类型: ${usage.subscriptionInfo.subscriptionTitle}`);
+    const remaining = await client.getRemainingCredits();
+    console.log(`剩余 credits: ${remaining}`);
+  } catch (error) {
+    console.error("\n❌ Token 验证失败:", error.message);
     return;
   }
 
   // 运行示例（按需取消注释）
   // await example1_getUsageLimits();
   // await example2_listModels();
-  // await example3_simpleChat();
+  await example3_simpleChat();
   // await example4_differentModels();
   // await example5_multiTurnConversation();
   // await example6_getRemainingCredits();
-
-  // 新增：两步式对话示例
-  await example7_chatWithIntent();
+  // await example7_chatWithIntent();
   // await example8_compareApproaches();
 
   console.log("\n\n✅ 示例运行完成!");
