@@ -1,0 +1,7 @@
+{
+  "accessToken": "YOUR_ACCESS_TOKEN_HERE",
+  "refreshToken": "YOUR_REFRESH_TOKEN_HERE",
+  "expiresAt": "2026-01-11T04:03:43.796Z",
+  "authMethod": "social",
+  "provider": "Google"
+}

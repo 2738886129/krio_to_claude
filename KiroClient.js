@@ -63,7 +63,7 @@ class KiroClient {
   /**
    * 获取可用模型列表
    * @param {object} params - 查询参数
-   * @returns {Promise<object>} 模型列表
+   * @returns {Promise<object>} 模型列表，包含 modelsMap 和原始数据
    */
   async listAvailableModels(params = {}) {
     try {
@@ -73,7 +73,28 @@ class KiroClient {
         },
         headers: this._getHeaders()
       });
-      return response.data;
+      
+      const data = response.data;
+      
+      // 创建 modelId -> 模型详情 的 Map
+      const modelsMap = new Map();
+      if (data.models) {
+        data.models.forEach(model => {
+          modelsMap.set(model.modelId, {
+            name: model.modelName,
+            id: model.modelId,
+            rateMultiplier: model.rateMultiplier,
+            maxInputTokens: model.tokenLimits?.maxInputTokens || null,
+            maxOutputTokens: model.tokenLimits?.maxOutputTokens || null
+          });
+        });
+      }
+      
+      return {
+        modelsMap,           // Map<modelId, modelInfo>
+        defaultModelId: data.defaultModel?.modelId,
+        raw: data            // 原始响应数据
+      };
     } catch (error) {
       throw this._handleError(error);
     }
@@ -305,6 +326,25 @@ class KiroClient {
   async getSubscriptionInfo() {
     const usage = await this.getUsageLimits();
     return usage.subscriptionInfo;
+  }
+
+  /**
+   * 获取特定模型的信息
+   * @param {string} modelId - 模型 ID
+   * @returns {Promise<object|null>} 模型信息，如果不存在返回 null
+   */
+  async getModelInfo(modelId) {
+    const result = await this.listAvailableModels();
+    return result.modelsMap.get(modelId) || null;
+  }
+
+  /**
+   * 获取所有可用的模型 ID 列表
+   * @returns {Promise<string[]>} 模型 ID 数组
+   */
+  async getAvailableModelIds() {
+    const result = await this.listAvailableModels();
+    return Array.from(result.modelsMap.keys());
   }
 }
 
