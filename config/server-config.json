@@ -5,5 +5,10 @@
   },
   "stream": {
     "chunkSize": 2
+  },
+  "token": {
+    "refreshRetryMax": 3,
+    "refreshRetryIntervalMs": 60000,
+    "refreshBufferMinutes": 5
   }
 }

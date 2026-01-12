@@ -1,6 +1,6 @@
 const express = require('express');
 const KiroClient = require('./KiroClient');
-const { loadToken } = require('./loadToken');
+const { loadToken, loadTokenWithRefresh, loadTokenInfo, needsRefresh } = require('./loadToken');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const path = require('path');
@@ -126,13 +126,15 @@ function formatClaudeError(error, defaultStatus = 500) {
 // 加载服务器配置
 let serverConfig = {
   server: { host: '0.0.0.0', port: 3000 },
-  stream: { chunkSize: 4 }
+  stream: { chunkSize: 4 },
+  token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 }
 };
 
 try {
   const configFile = fs.readFileSync(path.join(__dirname, '..', 'config', 'server-config.json'), 'utf8');
   serverConfig = { ...serverConfig, ...JSON.parse(configFile) };
   log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
+  log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
 } catch (error) {
   log('⚠️ 无法加载服务器配置，使用默认值');
 }
@@ -173,10 +175,93 @@ function mapModelId(claudeModelId) {
 
 // 初始化 Kiro 客户端
 let kiroClient;
+let currentToken;
+let refreshTimer = null;
+let refreshRetryCount = 0;
+
+/**
+ * 计算下次刷新时间（提前 N 分钟刷新）
+ */
+function getNextRefreshDelay(expiresAt) {
+  const expiresTime = new Date(expiresAt).getTime();
+  const now = Date.now();
+  const bufferMs = serverConfig.token.refreshBufferMinutes * 60 * 1000;
+  const delay = expiresTime - now - bufferMs;
+  
+  // 最小 10 秒，最大 50 分钟
+  return Math.max(10 * 1000, Math.min(delay, 50 * 60 * 1000));
+}
+
+/**
+ * 后台刷新 Token（不阻塞请求）
+ */
+async function backgroundRefreshToken() {
+  try {
+    log('🔄 后台刷新 Token...');
+    const newToken = await loadTokenWithRefresh({ bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 });
+    
+    if (newToken && newToken !== currentToken) {
+      currentToken = newToken;
+      kiroClient = new KiroClient(currentToken);
+      log('✅ Token 后台刷新成功，客户端已更新');
+    }
+    
+    // 刷新成功，重置重试计数
+    refreshRetryCount = 0;
+    
+    // 设置下次刷新定时器
+    scheduleNextRefresh();
+  } catch (error) {
+    refreshRetryCount++;
+    logError(`后台 Token 刷新失败 (${refreshRetryCount}/${serverConfig.token.refreshRetryMax})`, error);
+    
+    if (refreshRetryCount < serverConfig.token.refreshRetryMax) {
+      // 未达到最大重试次数，继续重试
+      log(`⏰ ${serverConfig.token.refreshRetryIntervalMs / 1000} 秒后重试...`);
+      refreshTimer = setTimeout(backgroundRefreshToken, serverConfig.token.refreshRetryIntervalMs);
+    } else {
+      // 达到最大重试次数，停止重试
+      logError(`❌ Token 刷新已达最大重试次数 (${serverConfig.token.refreshRetryMax})，停止重试。请手动检查 refreshToken 是否有效。`);
+    }
+  }
+}
+
+/**
+ * 根据 expiresAt 设置下次刷新定时器
+ */
+function scheduleNextRefresh() {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+  
+  try {
+    const tokenInfo = loadTokenInfo();
+    if (tokenInfo.expiresAt) {
+      const delay = getNextRefreshDelay(tokenInfo.expiresAt);
+      const nextRefreshTime = new Date(Date.now() + delay);
+      log(`⏰ 下次 Token 刷新时间: ${nextRefreshTime.toLocaleString('zh-CN')} (${Math.round(delay / 1000 / 60)} 分钟后)`);
+      refreshTimer = setTimeout(backgroundRefreshToken, delay);
+    }
+  } catch (error) {
+    logError('设置刷新定时器失败', error);
+  }
+}
+
+// 同步初始化
 try {
   const BEARER_TOKEN = loadToken();
+  currentToken = BEARER_TOKEN;
   kiroClient = new KiroClient(BEARER_TOKEN);
   log('✅ Kiro 客户端初始化成功');
+  
+  // 检查是否需要立即刷新，否则设置定时器
+  const tokenInfo = loadTokenInfo();
+  if (needsRefresh(tokenInfo, serverConfig.token.refreshBufferMinutes * 60)) {
+    log('⚠️ Token 已过期或即将过期，立即刷新');
+    backgroundRefreshToken();
+  } else {
+    scheduleNextRefresh();
+  }
 } catch (error) {
   logError('Kiro 客户端初始化失败', error);
   process.exit(1);
