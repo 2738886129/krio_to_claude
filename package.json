@@ -2,13 +2,12 @@
   "name": "kiro-api-client",
   "version": "1.0.0",
   "description": "Node.js client for calling Kiro AI API (Amazon Q Developer)",
-  "main": "KiroClient.js",
+  "main": "src/KiroClient.js",
   "scripts": {
-    "test": "node example.js",
-    "server": "node claude-api-server.js",
-    "test-api": "node test-claude-api.js",
-    "models": "node manage-models.js show",
-    "models:list": "node manage-models.js list"
+    "test": "node src/example.js",
+    "server": "node src/claude-api-server.js",
+    "models": "node src/manage-models.js show",
+    "models:list": "node src/manage-models.js list"
   },
   "keywords": [
     "kiro",

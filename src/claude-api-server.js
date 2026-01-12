@@ -9,7 +9,7 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 // 日志文件路径
-const LOGS_DIR = path.join(__dirname, 'logs');
+const LOGS_DIR = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(LOGS_DIR)) {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
 }
@@ -118,7 +118,7 @@ let modelMapping = {};
 let defaultModel = 'claude-sonnet-4.5';
 
 try {
-  const mappingFile = fs.readFileSync(path.join(__dirname, 'model-mapping.json'), 'utf8');
+  const mappingFile = fs.readFileSync(path.join(__dirname, '..', 'config', 'model-mapping.json'), 'utf8');
   const mappingConfig = JSON.parse(mappingFile);
   modelMapping = mappingConfig.mappings || {};
   defaultModel = mappingConfig.defaultModel || 'claude-sonnet-4.5';
@@ -232,29 +232,18 @@ function smartTruncateDescription(desc, maxLength) {
 
 /**
  * 将 Claude API 的 tools 格式转换为 Kiro API 格式
- * Claude: { name, description, input_schema: { type, properties, required, ... } }
- * Kiro: { toolSpecification: { name, description, inputSchema: { json: { $schema, type, properties, ... } } } }
- * 
- * 注意：
- * 1. Claude Code 使用 JSON Schema draft-2020-12，而 Kiro API 使用 draft-07
- * 2. Kiro API 对 tool description 有长度限制（约 5000 字符）
  */
 function convertToolsToKiroFormat(claudeTools) {
   if (!claudeTools || !Array.isArray(claudeTools)) return [];
   
-  // Kiro API 的 description 长度限制
-  const MAX_DESCRIPTION_LENGTH = 4500; // 留一些余量
+  const MAX_DESCRIPTION_LENGTH = 4500;
   
-  // 简化 property schema，只保留基本类型信息
   function simplifyPropertySchema(schema) {
     if (!schema || typeof schema !== 'object') return schema;
     
     const result = {};
-    
-    // 只保留基本字段
     if (schema.type) result.type = schema.type;
     if (schema.description) {
-      // 截断过长的 description
       result.description = schema.description.length > MAX_DESCRIPTION_LENGTH 
         ? schema.description.substring(0, MAX_DESCRIPTION_LENGTH) + '...'
         : schema.description;
@@ -262,7 +251,6 @@ function convertToolsToKiroFormat(claudeTools) {
     if (schema.enum) result.enum = schema.enum;
     if (schema.default !== undefined) result.default = schema.default;
     
-    // 递归处理嵌套的 properties
     if (schema.properties) {
       result.properties = {};
       for (const [key, value] of Object.entries(schema.properties)) {
@@ -274,8 +262,6 @@ function convertToolsToKiroFormat(claudeTools) {
     if (schema.additionalProperties !== undefined) {
       result.additionalProperties = schema.additionalProperties;
     }
-    
-    // 处理 items (for arrays)
     if (schema.items) {
       result.items = simplifyPropertySchema(schema.items);
     }
@@ -286,7 +272,6 @@ function convertToolsToKiroFormat(claudeTools) {
   return claudeTools.map(tool => {
     const inputSchema = JSON.parse(JSON.stringify(tool.input_schema || {}));
     
-    // 简化 schema
     const simplifiedSchema = {
       '$schema': 'http://json-schema.org/draft-07/schema#',
       'type': inputSchema.type || 'object',
@@ -294,19 +279,16 @@ function convertToolsToKiroFormat(claudeTools) {
       'additionalProperties': false
     };
     
-    // 简化每个 property
     if (inputSchema.properties) {
       for (const [key, value] of Object.entries(inputSchema.properties)) {
         simplifiedSchema.properties[key] = simplifyPropertySchema(value);
       }
     }
     
-    // 保留 required
     if (inputSchema.required) {
       simplifiedSchema.required = inputSchema.required;
     }
     
-    // 智能截断过长的 tool description
     let toolDescription = tool.description || '';
     if (toolDescription.length > MAX_DESCRIPTION_LENGTH) {
       const originalLength = toolDescription.length;
@@ -351,65 +333,11 @@ function extractToolResults(message) {
 
 /**
  * 从 Claude API 消息中提取图片并转换为 Kiro 格式
- * 
- * Claude API 图片格式:
- * {
- *   "type": "image",
- *   "source": {
- *     "type": "base64",
- *     "media_type": "image/jpeg",
- *     "data": "base64数据"
- *   }
- * }
- * 
- * Kiro API 图片格式:
- * {
- *   "format": "jpeg",
- *   "source": {
- *     "bytes": "base64数据"
- *   }
- * }
  */
 function extractImages(message) {
   const images = [];
   if (message && message.role === 'user' && Array.isArray(message.content)) {
     for (const block of message.content) {
-      if (block.type === 'image' && block.source) {
-        // 从 media_type 提取格式 (image/jpeg -> jpeg, image/png -> png)
-        let format = 'jpeg'; // 默认格式
-        if (block.source.media_type) {
-          const parts = block.source.media_type.split('/');
-          if (parts.length === 2) {
-            format = parts[1];
-          }
-        }
-        
-        // 支持 base64 和 url 两种类型
-        if (block.source.type === 'base64' && block.source.data) {
-          images.push({
-            format: format,
-            source: {
-              bytes: block.source.data
-            }
-          });
-          log(`[Images] 提取到 base64 图片, 格式: ${format}, 大小: ${block.source.data.length} 字符`);
-        } else if (block.source.type === 'url' && block.source.url) {
-          // Kiro 可能不支持 URL 类型，记录警告
-          log(`[Images] ⚠️ 检测到 URL 类型图片，Kiro 可能不支持: ${block.source.url}`);
-        }
-      }
-    }
-  }
-  return images;
-}
-
-/**
- * 从历史消息中提取图片
- */
-function extractImagesFromHistory(msg) {
-  const images = [];
-  if (Array.isArray(msg.content)) {
-    for (const block of msg.content) {
       if (block.type === 'image' && block.source) {
         let format = 'jpeg';
         if (block.source.media_type) {
@@ -426,6 +354,9 @@ function extractImagesFromHistory(msg) {
               bytes: block.source.data
             }
           });
+          log(`[Images] 提取到 base64 图片, 格式: ${format}, 大小: ${block.source.data.length} 字符`);
+        } else if (block.source.type === 'url' && block.source.url) {
+          log(`[Images] ⚠️ 检测到 URL 类型图片，Kiro 可能不支持: ${block.source.url}`);
         }
       }
     }
@@ -445,7 +376,6 @@ app.post('/v1/messages', async (req, res) => {
     const {
       model = 'claude-sonnet-4.5',
       messages = [],
-      max_tokens = 4096,
       stream = false,
       system,
       tools = []
@@ -477,13 +407,9 @@ app.post('/v1/messages', async (req, res) => {
         .join('\n');
     }
 
-    // 提取 tool_results
     const toolResults = extractToolResults(lastMessage);
-    
-    // 提取图片
     const images = extractImages(lastMessage);
     
-    // 如果没有文本内容但有 tool_results 或图片，这是正常的
     if (!userMessage && toolResults.length === 0 && images.length === 0) {
       return res.status(400).json({
         type: 'error',
@@ -503,7 +429,6 @@ app.post('/v1/messages', async (req, res) => {
       }
     }
 
-    // 转换 tools 为 Kiro 格式
     const kiroTools = convertToolsToKiroFormat(tools);
     log(`[Tools] 转换了 ${kiroTools.length} 个工具定义`);
     log(`[Tool Results] 检测到 ${toolResults.length} 个工具结果`);
@@ -511,7 +436,6 @@ app.post('/v1/messages', async (req, res) => {
     // 构建历史记录
     const history = [];
     
-    // System prompt 作为第一条历史
     if (systemPrompt) {
       history.push({
         userInputMessage: {
@@ -543,7 +467,6 @@ app.post('/v1/messages', async (req, res) => {
             if (block.type === 'text') {
               userContent += (userContent ? '\n' : '') + block.text;
             } else if (block.type === 'tool_result') {
-              // 提取历史中的 tool_result
               userToolResults.push({
                 toolUseId: block.tool_use_id,
                 status: block.is_error ? 'error' : 'success',
@@ -554,7 +477,6 @@ app.post('/v1/messages', async (req, res) => {
                 }]
               });
             } else if (block.type === 'image' && block.source) {
-              // 提取历史中的图片
               let format = 'jpeg';
               if (block.source.media_type) {
                 const parts = block.source.media_type.split('/');
@@ -580,12 +502,10 @@ app.post('/v1/messages', async (req, res) => {
           origin: 'AI_EDITOR'
         };
         
-        // 如果有图片，添加到 userInputMessage
         if (userImages.length > 0) {
           userInputMessage.images = userImages;
         }
         
-        // 如果有 tool_results，添加到 userInputMessageContext
         if (userToolResults.length > 0) {
           userInputMessage.userInputMessageContext = {
             toolResults: userToolResults
@@ -605,7 +525,6 @@ app.post('/v1/messages', async (req, res) => {
             if (block.type === 'text') {
               assistantContent += block.text;
             } else if (block.type === 'tool_use') {
-              // 转换为 Kiro 格式的 toolUses
               assistantToolUses.push({
                 name: block.name,
                 toolUseId: block.id,
@@ -619,7 +538,6 @@ app.post('/v1/messages', async (req, res) => {
           content: assistantContent
         };
         
-        // 如果有工具调用，添加 toolUses 数组
         if (assistantToolUses.length > 0) {
           assistantResponseMessage.toolUses = assistantToolUses;
         }
@@ -635,11 +553,7 @@ app.post('/v1/messages', async (req, res) => {
     log(`[历史] ${history.length} 条记录`);
     log(`[当前消息] ${(userMessage || '(tool_result)').substring(0, 50)}...`);
 
-    // 写入调试文件
-    // 构建 userInputMessageContext - 只包含非空的字段
     const userInputMessageContext = {};
-    
-    // 启用 tools 传递（已转换为 Kiro 格式）
     if (kiroTools.length > 0) {
       userInputMessageContext.tools = kiroTools;
     }
@@ -647,7 +561,6 @@ app.post('/v1/messages', async (req, res) => {
       userInputMessageContext.toolResults = toolResults;
     }
     
-    // 构建 userInputMessage
     const currentUserInputMessage = {
       content: userMessage,
       modelId: kiroModelId,
@@ -655,7 +568,6 @@ app.post('/v1/messages', async (req, res) => {
       userInputMessageContext: userInputMessageContext
     };
     
-    // 如果有图片，添加到 userInputMessage
     if (images.length > 0) {
       currentUserInputMessage.images = images;
     }
@@ -677,10 +589,8 @@ app.post('/v1/messages', async (req, res) => {
         modelId: kiroModelId,
         conversationId,
         history,
-        // 启用 tools 传递（已转换为 Kiro 格式）
         tools: kiroTools.length > 0 ? kiroTools : undefined,
         toolResults: toolResults.length > 0 ? toolResults : undefined,
-        // 传递图片
         images: images.length > 0 ? images : undefined
       });
 
@@ -728,9 +638,8 @@ app.post('/v1/messages', async (req, res) => {
       type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' }
     })}\n\n`);
 
-    // 跟踪流式状态
     let currentToolIndex = 0;
-    let toolIndexMap = {};  // toolUseId -> index 映射
+    let toolIndexMap = {};
     let textBlockEnded = false;
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
@@ -739,38 +648,31 @@ app.post('/v1/messages', async (req, res) => {
       modelId: kiroModelId,
       conversationId,
       history,
-      // 启用 tools 传递（已转换为 Kiro 格式）
       tools: kiroTools.length > 0 ? kiroTools : undefined,
       toolResults: toolResults.length > 0 ? toolResults : undefined,
-      // 传递图片
       images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
-          // 文本内容增量
           res.write(`event: content_block_delta\ndata: ${JSON.stringify({
             type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.data }
           })}\n\n`);
         } else if (chunk.type === 'tool_use_start') {
-          // 工具调用开始 - 先结束文本块（如果还没结束）
           if (!textBlockEnded) {
             res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
             textBlockEnded = true;
           }
           
-          // 分配新的 index
           currentToolIndex++;
           toolIndexMap[chunk.toolUseId] = currentToolIndex;
           
           log(`[流式响应] 工具调用开始: ${chunk.name} (${chunk.toolUseId}) index=${currentToolIndex}`);
           
-          // 发送工具调用开始事件
           res.write(`event: content_block_start\ndata: ${JSON.stringify({
             type: 'content_block_start',
             index: currentToolIndex,
             content_block: { type: 'tool_use', id: chunk.toolUseId, name: chunk.name, input: {} }
           })}\n\n`);
         } else if (chunk.type === 'tool_use_delta') {
-          // 工具调用输入增量
           const toolIndex = toolIndexMap[chunk.toolUseId];
           if (toolIndex !== undefined && chunk.inputDelta) {
             res.write(`event: content_block_delta\ndata: ${JSON.stringify({
@@ -780,7 +682,6 @@ app.post('/v1/messages', async (req, res) => {
             })}\n\n`);
           }
         } else if (chunk.type === 'tool_use_stop') {
-          // 工具调用结束
           const toolIndex = toolIndexMap[chunk.toolUseId];
           if (toolIndex !== undefined) {
             log(`[流式响应] 工具调用结束: ${chunk.name} index=${toolIndex}`);
@@ -790,14 +691,11 @@ app.post('/v1/messages', async (req, res) => {
       }
     });
 
-    // 获取 token 计数
     totalInputTokens = result.usage?.input_tokens || 0;
     totalOutputTokens = result.usage?.output_tokens || 0;
 
-    // result 包含完整响应（包括工具调用）
     const hasToolUses = result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0;
     
-    // 如果文本块还没结束，结束它
     if (!textBlockEnded) {
       res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
     }
@@ -805,7 +703,6 @@ app.post('/v1/messages', async (req, res) => {
     if (hasToolUses) {
       log(`[流式响应] 共 ${result.parsedContent.toolUses.length} 个工具调用`);
       
-      // 发送消息结束，stop_reason 为 tool_use
       res.write(`event: message_delta\ndata: ${JSON.stringify({ 
         type: 'message_delta', 
         delta: { stop_reason: 'tool_use', stop_sequence: null }, 

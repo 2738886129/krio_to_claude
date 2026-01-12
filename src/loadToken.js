@@ -6,7 +6,7 @@ const path = require('path');
  * @returns {string} Bearer Token
  */
 function loadToken() {
-  const tokenPath = path.join(__dirname, 'kiro-auth-token.json');
+  const tokenPath = path.join(__dirname, '..', 'config', 'kiro-auth-token.json');
   
   try {
     const data = fs.readFileSync(tokenPath, 'utf8');
@@ -42,7 +42,7 @@ function loadToken() {
  * @returns {object} Token 数据
  */
 function loadTokenInfo() {
-  const tokenPath = path.join(__dirname, 'kiro-auth-token.json');
+  const tokenPath = path.join(__dirname, '..', 'config', 'kiro-auth-token.json');
   
   try {
     const data = fs.readFileSync(tokenPath, 'utf8');

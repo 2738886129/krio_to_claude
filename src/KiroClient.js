@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 // 日志文件路径
-const LOGS_DIR = path.join(__dirname, 'logs');
+const LOGS_DIR = path.join(__dirname, '..', 'logs');
 if (!fs.existsSync(LOGS_DIR)) {
   fs.mkdirSync(LOGS_DIR, { recursive: true });
 }
@@ -230,7 +230,7 @@ class KiroClient {
             const payloadLength = totalLength - payloadStart - 4;  // 减去 message CRC
             
             if (payloadLength > 0) {
-              const payload = binaryBuffer.slice(payloadStart, payloadStart + payloadLength);
+              const payload = binaryBuffer.subarray(payloadStart, payloadStart + payloadLength);
               const payloadStr = payload.toString('utf8');
               
               logToFile(
@@ -372,7 +372,7 @@ class KiroClient {
             }
             
             // 移除已处理的消息
-            binaryBuffer = binaryBuffer.slice(totalLength);
+            binaryBuffer = binaryBuffer.subarray(totalLength);
           }
         });
 

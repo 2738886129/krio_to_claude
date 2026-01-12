@@ -3,7 +3,7 @@ const path = require('path');
 const KiroClient = require('./KiroClient');
 const { loadToken } = require('./loadToken');
 
-const MAPPING_FILE = path.join(__dirname, 'model-mapping.json');
+const MAPPING_FILE = path.join(__dirname, '..', 'config', 'model-mapping.json');
 
 /**
  * 显示当前的模型映射
@@ -51,7 +51,7 @@ function addMapping(claudeModel, kiroModel) {
     if (config.mappings[claudeModel]) {
       console.log(`⚠️  映射已存在: ${claudeModel} -> ${config.mappings[claudeModel]}`);
       console.log(`是否要更新为: ${claudeModel} -> ${kiroModel}?`);
-      console.log('请手动编辑 model-mapping.json 文件');
+      console.log('请手动编辑 config/model-mapping.json 文件');
       return;
     }
     
@@ -145,7 +145,7 @@ function testMapping(claudeModel) {
     }
     
     console.log('\n建议: 添加精确映射以避免模糊匹配');
-    console.log(`命令: node manage-models.js add "${claudeModel}" "目标Kiro模型ID"`);
+    console.log(`命令: node src/manage-models.js add "${claudeModel}" "目标Kiro模型ID"`);
   } catch (error) {
     console.error('❌ 测试失败:', error.message);
   }
@@ -158,8 +158,10 @@ function showHelp() {
   console.log(`
 模型映射管理工具
 
+配置文件位置: config/model-mapping.json
+
 用法:
-  node manage-models.js <命令> [参数]
+  node src/manage-models.js <命令> [参数]
 
 命令:
   show                          显示当前所有映射
@@ -170,11 +172,11 @@ function showHelp() {
   help                          显示此帮助信息
 
 示例:
-  node manage-models.js show
-  node manage-models.js list
-  node manage-models.js add "claude-3-5-sonnet-20260101" "claude-sonnet-4.5"
-  node manage-models.js remove "claude-3-5-sonnet-20260101"
-  node manage-models.js test "claude-3-5-haiku-latest"
+  node src/manage-models.js show
+  node src/manage-models.js list
+  node src/manage-models.js add "claude-3-5-sonnet-20260101" "claude-sonnet-4.5"
+  node src/manage-models.js remove "claude-3-5-sonnet-20260101"
+  node src/manage-models.js test "claude-3-5-haiku-latest"
 `);
 }
 
@@ -194,7 +196,7 @@ async function main() {
       
     case 'add':
       if (args.length < 3) {
-        console.error('❌ 用法: node manage-models.js add <claude-id> <kiro-id>');
+        console.error('❌ 用法: node src/manage-models.js add <claude-id> <kiro-id>');
         process.exit(1);
       }
       addMapping(args[1], args[2]);
@@ -202,7 +204,7 @@ async function main() {
       
     case 'remove':
       if (args.length < 2) {
-        console.error('❌ 用法: node manage-models.js remove <claude-id>');
+        console.error('❌ 用法: node src/manage-models.js remove <claude-id>');
         process.exit(1);
       }
       removeMapping(args[1]);
@@ -210,7 +212,7 @@ async function main() {
       
     case 'test':
       if (args.length < 2) {
-        console.error('❌ 用法: node manage-models.js test <claude-id>');
+        console.error('❌ 用法: node src/manage-models.js test <claude-id>');
         process.exit(1);
       }
       testMapping(args[1]);
