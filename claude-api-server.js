@@ -283,6 +283,90 @@ function extractToolResults(message) {
 }
 
 /**
+ * 从 Claude API 消息中提取图片并转换为 Kiro 格式
+ * 
+ * Claude API 图片格式:
+ * {
+ *   "type": "image",
+ *   "source": {
+ *     "type": "base64",
+ *     "media_type": "image/jpeg",
+ *     "data": "base64数据"
+ *   }
+ * }
+ * 
+ * Kiro API 图片格式:
+ * {
+ *   "format": "jpeg",
+ *   "source": {
+ *     "bytes": "base64数据"
+ *   }
+ * }
+ */
+function extractImages(message) {
+  const images = [];
+  if (message && message.role === 'user' && Array.isArray(message.content)) {
+    for (const block of message.content) {
+      if (block.type === 'image' && block.source) {
+        // 从 media_type 提取格式 (image/jpeg -> jpeg, image/png -> png)
+        let format = 'jpeg'; // 默认格式
+        if (block.source.media_type) {
+          const parts = block.source.media_type.split('/');
+          if (parts.length === 2) {
+            format = parts[1];
+          }
+        }
+        
+        // 支持 base64 和 url 两种类型
+        if (block.source.type === 'base64' && block.source.data) {
+          images.push({
+            format: format,
+            source: {
+              bytes: block.source.data
+            }
+          });
+          log(`[Images] 提取到 base64 图片, 格式: ${format}, 大小: ${block.source.data.length} 字符`);
+        } else if (block.source.type === 'url' && block.source.url) {
+          // Kiro 可能不支持 URL 类型，记录警告
+          log(`[Images] ⚠️ 检测到 URL 类型图片，Kiro 可能不支持: ${block.source.url}`);
+        }
+      }
+    }
+  }
+  return images;
+}
+
+/**
+ * 从历史消息中提取图片
+ */
+function extractImagesFromHistory(msg) {
+  const images = [];
+  if (Array.isArray(msg.content)) {
+    for (const block of msg.content) {
+      if (block.type === 'image' && block.source) {
+        let format = 'jpeg';
+        if (block.source.media_type) {
+          const parts = block.source.media_type.split('/');
+          if (parts.length === 2) {
+            format = parts[1];
+          }
+        }
+        
+        if (block.source.type === 'base64' && block.source.data) {
+          images.push({
+            format: format,
+            source: {
+              bytes: block.source.data
+            }
+          });
+        }
+      }
+    }
+  }
+  return images;
+}
+
+/**
  * Claude API 兼容端点: /v1/messages
  */
 app.post('/v1/messages', async (req, res) => {
@@ -329,13 +413,18 @@ app.post('/v1/messages', async (req, res) => {
     // 提取 tool_results
     const toolResults = extractToolResults(lastMessage);
     
-    // 如果没有文本内容但有 tool_results，这是正常的
-    if (!userMessage && toolResults.length === 0) {
+    // 提取图片
+    const images = extractImages(lastMessage);
+    
+    // 如果没有文本内容但有 tool_results 或图片，这是正常的
+    if (!userMessage && toolResults.length === 0 && images.length === 0) {
       return res.status(400).json({
         type: 'error',
         error: { type: 'invalid_request_error', message: '消息内容不能为空' }
       });
     }
+    
+    log(`[Images] 当前消息包含 ${images.length} 张图片`);
 
     // 处理 system prompt
     let systemPrompt = '';
@@ -378,6 +467,7 @@ app.post('/v1/messages', async (req, res) => {
       if (msg.role === 'user') {
         let userContent = '';
         const userToolResults = [];
+        const userImages = [];
         
         if (typeof msg.content === 'string') {
           userContent = msg.content;
@@ -396,6 +486,23 @@ app.post('/v1/messages', async (req, res) => {
                     : JSON.stringify(block.content)
                 }]
               });
+            } else if (block.type === 'image' && block.source) {
+              // 提取历史中的图片
+              let format = 'jpeg';
+              if (block.source.media_type) {
+                const parts = block.source.media_type.split('/');
+                if (parts.length === 2) {
+                  format = parts[1];
+                }
+              }
+              if (block.source.type === 'base64' && block.source.data) {
+                userImages.push({
+                  format: format,
+                  source: {
+                    bytes: block.source.data
+                  }
+                });
+              }
             }
           }
         }
@@ -405,6 +512,11 @@ app.post('/v1/messages', async (req, res) => {
           modelId: mapModelId(model),
           origin: 'AI_EDITOR'
         };
+        
+        // 如果有图片，添加到 userInputMessage
+        if (userImages.length > 0) {
+          userInputMessage.images = userImages;
+        }
         
         // 如果有 tool_results，添加到 userInputMessageContext
         if (userToolResults.length > 0) {
@@ -468,17 +580,25 @@ app.post('/v1/messages', async (req, res) => {
       userInputMessageContext.toolResults = toolResults;
     }
     
+    // 构建 userInputMessage
+    const currentUserInputMessage = {
+      content: userMessage,
+      modelId: kiroModelId,
+      origin: 'AI_EDITOR',
+      userInputMessageContext: userInputMessageContext
+    };
+    
+    // 如果有图片，添加到 userInputMessage
+    if (images.length > 0) {
+      currentUserInputMessage.images = images;
+    }
+    
     const conversationState = {
       agentTaskType: 'vibe',
       chatTriggerType: 'MANUAL',
       conversationId,
       currentMessage: {
-        userInputMessage: {
-          content: userMessage,
-          modelId: kiroModelId,
-          origin: 'AI_EDITOR',
-          userInputMessageContext: userInputMessageContext
-        }
+        userInputMessage: currentUserInputMessage
       },
       history
     };
@@ -492,7 +612,9 @@ app.post('/v1/messages', async (req, res) => {
         history,
         // 启用 tools 传递（已转换为 Kiro 格式）
         tools: kiroTools.length > 0 ? kiroTools : undefined,
-        toolResults: toolResults.length > 0 ? toolResults : undefined
+        toolResults: toolResults.length > 0 ? toolResults : undefined,
+        // 传递图片
+        images: images.length > 0 ? images : undefined
       });
 
       log(`[响应] content 长度: ${result.content ? result.content.length : 0}`);
@@ -546,6 +668,8 @@ app.post('/v1/messages', async (req, res) => {
       // 启用 tools 传递（已转换为 Kiro 格式）
       tools: kiroTools.length > 0 ? kiroTools : undefined,
       toolResults: toolResults.length > 0 ? toolResults : undefined,
+      // 传递图片
+      images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
           res.write(`event: content_block_delta\ndata: ${JSON.stringify({

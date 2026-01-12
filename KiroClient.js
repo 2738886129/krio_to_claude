@@ -436,17 +436,25 @@ class KiroClient {
       Object.assign(userInputMessageContext, options.context);
     }
     
+    // 构建 userInputMessage
+    const userInputMessage = {
+      content: message,
+      modelId: options.modelId || 'claude-sonnet-4.5',
+      origin: options.origin || 'AI_EDITOR',
+      userInputMessageContext: userInputMessageContext
+    };
+    
+    // 添加图片（如果有）
+    if (options.images && options.images.length > 0) {
+      userInputMessage.images = options.images;
+    }
+    
     const conversationState = {
       agentTaskType: options.agentTaskType || 'vibe',
       chatTriggerType: options.chatTriggerType || 'MANUAL',
       conversationId: options.conversationId || uuidv4(),
       currentMessage: {
-        userInputMessage: {
-          content: message,
-          modelId: options.modelId || 'claude-sonnet-4.5',
-          origin: options.origin || 'AI_EDITOR',
-          userInputMessageContext: userInputMessageContext
-        }
+        userInputMessage: userInputMessage
       },
       history: options.history || []
     };

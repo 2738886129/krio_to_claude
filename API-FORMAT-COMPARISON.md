@@ -330,3 +330,67 @@ System prompt 作为历史记录的第一对消息：
 4. **ID 格式**：
    - Claude: `toolu_xxx`
    - Kiro: `tooluse_xxx`
+
+
+---
+
+## 10. 图片（多模态）格式对比
+
+### Claude API 图片格式
+```json
+{
+  "role": "user",
+  "content": [
+    {
+      "type": "image",
+      "source": {
+        "type": "base64",
+        "media_type": "image/jpeg",
+        "data": "base64编码的图片数据..."
+      }
+    },
+    {
+      "type": "text",
+      "text": "这张图片里有什么？"
+    }
+  ]
+}
+```
+
+### Kiro API 图片格式
+```json
+{
+  "userInputMessage": {
+    "content": "这张图片里有什么？",
+    "images": [
+      {
+        "format": "jpeg",
+        "source": {
+          "bytes": "base64编码的图片数据..."
+        }
+      }
+    ],
+    "modelId": "claude-opus-4.5",
+    "origin": "AI_EDITOR"
+  }
+}
+```
+
+**关键差异：**
+| 项目 | Claude API | Kiro API |
+|------|-----------|----------|
+| 图片位置 | `content` 数组中的 block | 独立的 `images` 数组 |
+| 格式字段 | `media_type: "image/jpeg"` | `format: "jpeg"` |
+| 数据字段 | `source.data` | `source.bytes` |
+| 类型标识 | `source.type: "base64"` | 无（默认 base64） |
+
+**支持的图片格式：**
+- jpeg / jpg
+- png
+- gif
+- webp
+
+**转换逻辑：**
+1. 从 `media_type` 提取格式（如 `image/jpeg` → `jpeg`）
+2. 将 `source.data` 映射到 `source.bytes`
+3. 图片从 `content` 数组提取到独立的 `images` 数组
