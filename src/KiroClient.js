@@ -1,4 +1,5 @@
 const axios = require('axios');
+const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 const util = require('util');
 const fs = require('fs');
@@ -47,14 +48,29 @@ class KiroClient {
     this.userAgent = options.userAgent || 'aws-sdk-js/1.0.0 KiroIDE-0.8.0-c550b87543e105c1e1124702d94e55647c94c9368cc47e5b3b19030bce23ac7a';
     this.sdkUserAgent = options.sdkUserAgent || 'aws-sdk-js/1.0.0 ua/2.1 os/win32#10.0.19045 lang/js md/nodejs#22.21.1 api/codewhispererruntime#1.0.0 m/N,E KiroIDE-0.8.0';
 
+    // HTTPS 连接池配置
+    this.httpsAgent = new https.Agent({
+      keepAlive: true,           // 启用 keep-alive 复用连接
+      maxSockets: options.maxSockets || 10,        // 最大并发连接数
+      maxFreeSockets: options.maxFreeSockets || 5, // 空闲连接池大小
+      timeout: options.socketTimeout || 60000,     // socket 超时
+      scheduling: 'lifo'         // 后进先出，优先复用最近的连接
+    });
+
     // Axios 实例
     this.client = axios.create({
       baseURL: this.baseURL,
       timeout: options.timeout || 30000,
+      httpsAgent: this.httpsAgent,
       headers: {
-        'Connection': 'close'
+        'Connection': 'keep-alive'
       }
     });
+    
+    logToFile(
+      `[KiroClient] 初始化连接池: maxSockets=${this.httpsAgent.maxSockets}, maxFreeSockets=${this.httpsAgent.maxFreeSockets}`,
+      '[Kiro] 连接池已初始化'
+    );
 
     // 添加响应拦截器来捕获错误详情
     this.client.interceptors.response.use(
@@ -683,6 +699,31 @@ class KiroClient {
     
     // 至少返回 1
     return Math.max(1, estimatedTokens);
+  }
+
+  /**
+   * 获取连接池状态（用于监控）
+   * @returns {object} 连接池状态信息
+   */
+  getPoolStatus() {
+    const agent = this.httpsAgent;
+    return {
+      totalSockets: Object.keys(agent.sockets).reduce((sum, key) => sum + (agent.sockets[key]?.length || 0), 0),
+      freeSockets: Object.keys(agent.freeSockets).reduce((sum, key) => sum + (agent.freeSockets[key]?.length || 0), 0),
+      pendingRequests: Object.keys(agent.requests).reduce((sum, key) => sum + (agent.requests[key]?.length || 0), 0),
+      maxSockets: agent.maxSockets,
+      maxFreeSockets: agent.maxFreeSockets
+    };
+  }
+
+  /**
+   * 销毁连接池（优雅关闭时调用）
+   */
+  destroy() {
+    if (this.httpsAgent) {
+      this.httpsAgent.destroy();
+      logToFile('[KiroClient] 连接池已销毁', '[Kiro] 连接池已销毁');
+    }
   }
 
   /**

@@ -951,7 +951,12 @@ app.post('/v1/messages', async (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'kiro-claude-api' });
+  const poolStatus = kiroClient.getPoolStatus ? kiroClient.getPoolStatus() : null;
+  res.json({ 
+    status: 'ok', 
+    service: 'kiro-claude-api',
+    connectionPool: poolStatus
+  });
 });
 
 app.get('/v1/models', async (req, res) => {
@@ -970,8 +975,40 @@ app.get('/v1/models', async (req, res) => {
 
 const PORT = serverConfig.server.port;
 const HOST = serverConfig.server.host;
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   log(`🚀 Claude API 兼容服务器运行在 http://${HOST}:${PORT}`);
   log(`📝 API 端点: POST http://${HOST}:${PORT}/v1/messages`);
   log(`📋 模型列表: GET http://${HOST}:${PORT}/v1/models`);
 });
+
+// 优雅关闭处理
+function gracefulShutdown(signal) {
+  log(`\n📴 收到 ${signal} 信号，正在优雅关闭...`);
+  
+  // 清理 Token 刷新定时器
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    log('✅ Token 刷新定时器已清理');
+  }
+  
+  // 销毁 KiroClient 连接池
+  if (kiroClient && kiroClient.destroy) {
+    kiroClient.destroy();
+    log('✅ KiroClient 连接池已销毁');
+  }
+  
+  // 关闭 HTTP 服务器
+  server.close(() => {
+    log('✅ HTTP 服务器已关闭');
+    process.exit(0);
+  });
+  
+  // 强制退出超时
+  setTimeout(() => {
+    log('⚠️ 强制退出');
+    process.exit(1);
+  }, 5000);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
