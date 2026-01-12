@@ -5,7 +5,11 @@ const fs = require('fs');
 const path = require('path');
 
 // 日志文件路径
-const KIRO_LOG_FILE = path.join(__dirname, 'kiro-client-debug.log');
+const LOGS_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(LOGS_DIR)) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+const KIRO_LOG_FILE = path.join(LOGS_DIR, 'kiro-client-debug.log');
 
 // 初始化日志文件
 fs.writeFileSync(KIRO_LOG_FILE, `=== Kiro Client 日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');

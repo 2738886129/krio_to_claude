@@ -3,5 +3,9 @@ npm-debug.log
 .DS_Store
 *.log
 
+# 日志文件夹（保留 .gitkeep）
+logs/*
+!logs/.gitkeep
+
 # Token 文件（包含敏感信息）
 kiro-auth-token.json

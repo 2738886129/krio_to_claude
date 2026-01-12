@@ -9,8 +9,12 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 // 日志文件路径
-const LOG_FILE = path.join(__dirname, 'server-debug.log');
-const ERROR_LOG_FILE = path.join(__dirname, 'server-error.log');
+const LOGS_DIR = path.join(__dirname, 'logs');
+if (!fs.existsSync(LOGS_DIR)) {
+  fs.mkdirSync(LOGS_DIR, { recursive: true });
+}
+const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
+const ERROR_LOG_FILE = path.join(LOGS_DIR, 'server-error.log');
 
 // 日志函数
 function log(message) {
@@ -665,7 +669,7 @@ app.post('/v1/messages', async (req, res) => {
       },
       history
     };
-    fs.writeFileSync('conversationState-debug.json', JSON.stringify(conversationState, null, 2), 'utf8');
+    fs.writeFileSync(path.join(LOGS_DIR, 'conversationState-debug.json'), JSON.stringify(conversationState, null, 2), 'utf8');
 
     // 非流式响应
     if (!stream) {
