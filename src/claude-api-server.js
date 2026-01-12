@@ -71,6 +71,7 @@ const ERROR_TYPES = {
 
 /**
  * 将错误转换为 Claude API 格式
+ * 尽量保留原始错误信息，直接透传给客户端
  */
 function formatClaudeError(error, defaultStatus = 500) {
   let status = defaultStatus;
@@ -83,25 +84,31 @@ function formatClaudeError(error, defaultStatus = 500) {
     status = parseInt(statusMatch[1], 10);
   }
   
+  // 尝试从错误消息中提取 Kiro API 的原始错误信息
+  let originalMessage = message;
+  const jsonMatch = message.match(/\{.*"message"\s*:\s*"([^"]+)".*\}/);
+  if (jsonMatch) {
+    // 提取 JSON 中的 message 字段作为主要错误信息
+    originalMessage = jsonMatch[1];
+  }
+  
   // 根据状态码确定错误类型
   errorType = ERROR_TYPES[status] || 'api_error';
   
-  // 特殊错误消息处理
-  if (message.includes('token') || message.includes('Token') || message.includes('unauthorized')) {
-    errorType = 'authentication_error';
-    status = 401;
-  } else if (message.includes('rate limit') || message.includes('too many')) {
+  // 特殊错误消息处理 - 基于原始消息内容
+  // Kiro 后端认证问题返回 400，让客户端停止重试
+  if (originalMessage.includes('token') || originalMessage.includes('Token') || 
+      originalMessage.includes('invalid') || originalMessage.includes('unauthorized') ||
+      originalMessage.includes('bearer')) {
+    errorType = 'invalid_request_error';
+    status = 400;
+    originalMessage = `[Kiro 后端认证失败] ${originalMessage}`;
+  } else if (originalMessage.includes('rate limit') || originalMessage.includes('too many')) {
     errorType = 'rate_limit_error';
-    status = 429;
-  } else if (message.includes('not found')) {
+  } else if (originalMessage.includes('not found')) {
     errorType = 'not_found_error';
-    status = 404;
-  } else if (message.includes('permission') || message.includes('forbidden')) {
-    errorType = 'permission_error';
-    status = 403;
-  } else if (message.includes('overloaded') || message.includes('capacity')) {
+  } else if (originalMessage.includes('overloaded') || originalMessage.includes('capacity')) {
     errorType = 'overloaded_error';
-    status = 503;
   }
   
   return {
@@ -110,10 +117,24 @@ function formatClaudeError(error, defaultStatus = 500) {
       type: 'error',
       error: {
         type: errorType,
-        message: message
+        message: originalMessage
       }
     }
   };
+}
+
+// 加载服务器配置
+let serverConfig = {
+  server: { host: '0.0.0.0', port: 3000 },
+  stream: { chunkSize: 4 }
+};
+
+try {
+  const configFile = fs.readFileSync(path.join(__dirname, '..', 'config', 'server-config.json'), 'utf8');
+  serverConfig = { ...serverConfig, ...JSON.parse(configFile) };
+  log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
+} catch (error) {
+  log('⚠️ 无法加载服务器配置，使用默认值');
 }
 
 // 加载模型映射配置
@@ -700,9 +721,8 @@ app.post('/v1/messages', async (req, res) => {
     }
 
     // 流式响应
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+    // 注意：不要在这里设置 headers，等确认 API 调用成功后再设置
+    // 这样如果 API 调用失败，还能返回 JSON 格式的错误
 
     const messageId = `msg_${uuidv4().replace(/-/g, '')}`;
 
@@ -719,6 +739,11 @@ app.post('/v1/messages', async (req, res) => {
     const ensureStreamStarted = () => {
       if (!streamStarted) {
         streamStarted = true;
+        // 在第一次写入时才设置流式响应的 headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        
         res.write(`event: message_start\ndata: ${JSON.stringify({
           type: 'message_start',
           message: { id: messageId, type: 'message', role: 'assistant', content: [], model: model, usage: { input_tokens: 0, output_tokens: 0 } }
@@ -742,9 +767,16 @@ app.post('/v1/messages', async (req, res) => {
           // 收到第一个内容时才发送开始事件
           ensureStreamStarted();
           hasTextContent = true;  // 标记有文本内容
-          res.write(`event: content_block_delta\ndata: ${JSON.stringify({
-            type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.data }
-          })}\n\n`);
+          
+          // 将大块内容拆分成小块，模拟流式打字效果
+          const text = chunk.data;
+          const chunkSize = serverConfig.stream.chunkSize;
+          for (let i = 0; i < text.length; i += chunkSize) {
+            const smallChunk = text.slice(i, i + chunkSize);
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+              type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: smallChunk }
+            })}\n\n`);
+          }
         } else if (chunk.type === 'tool_use_start') {
           // 工具调用开始时也要确保流已启动
           ensureStreamStarted();
@@ -825,7 +857,10 @@ app.post('/v1/messages', async (req, res) => {
     logError('API 请求处理失败', error);
     if (!res.headersSent) {
       const formattedError = formatClaudeError(error);
+      log(`[错误响应] 状态码: ${formattedError.status}, 类型: ${formattedError.body.error.type}, 消息: ${formattedError.body.error.message}`);
       res.status(formattedError.status).json(formattedError.body);
+    } else {
+      log(`[错误响应] headers 已发送，无法返回 JSON 错误`);
     }
   }
 });
@@ -848,9 +883,10 @@ app.get('/v1/models', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  log(`🚀 Claude API 兼容服务器运行在 http://localhost:${PORT}`);
-  log(`📝 API 端点: POST http://localhost:${PORT}/v1/messages`);
-  log(`📋 模型列表: GET http://localhost:${PORT}/v1/models`);
+const PORT = serverConfig.server.port;
+const HOST = serverConfig.server.host;
+app.listen(PORT, HOST, () => {
+  log(`🚀 Claude API 兼容服务器运行在 http://${HOST}:${PORT}`);
+  log(`📝 API 端点: POST http://${HOST}:${PORT}/v1/messages`);
+  log(`📋 模型列表: GET http://${HOST}:${PORT}/v1/models`);
 });
