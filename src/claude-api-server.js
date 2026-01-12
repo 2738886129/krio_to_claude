@@ -15,6 +15,7 @@ if (!fs.existsSync(LOGS_DIR)) {
 }
 const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
 const ERROR_LOG_FILE = path.join(LOGS_DIR, 'server-error.log');
+const RAW_REQUEST_LOG_FILE = path.join(LOGS_DIR, 'claude-code-requests.log');
 
 // 日志函数
 function log(message) {
@@ -48,7 +49,9 @@ function logError(message, error = null) {
 // 清空日志文件
 fs.writeFileSync(LOG_FILE, `=== 服务器启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
 fs.writeFileSync(ERROR_LOG_FILE, `=== 错误日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
+fs.writeFileSync(RAW_REQUEST_LOG_FILE, `=== Claude Code 原始请求日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
 log('日志文件已初始化: ' + LOG_FILE);
+log('原始请求日志文件: ' + RAW_REQUEST_LOG_FILE);
 
 /**
  * Claude API 错误类型映射
@@ -365,12 +368,86 @@ function extractImages(message) {
 }
 
 /**
+ * 记录 Claude Code 客户端的原始请求
+ */
+function logRawRequest(req) {
+  const timestamp = new Date().toISOString();
+  const separator = '='.repeat(80);
+  
+  let logContent = `\n${separator}\n`;
+  logContent += `[${timestamp}] 收到请求\n`;
+  logContent += `${separator}\n\n`;
+  
+  // 记录请求头
+  logContent += `【请求头】\n`;
+  logContent += `Content-Type: ${req.headers['content-type']}\n`;
+  logContent += `Content-Length: ${req.headers['content-length']}\n\n`;
+  
+  // 记录请求体概要
+  const body = req.body;
+  logContent += `【请求概要】\n`;
+  logContent += `Model: ${body.model}\n`;
+  logContent += `Stream: ${body.stream}\n`;
+  logContent += `Messages 数量: ${body.messages?.length || 0}\n`;
+  logContent += `Tools 数量: ${body.tools?.length || 0}\n\n`;
+  
+  // 记录最后一条消息的详细内容
+  if (body.messages && body.messages.length > 0) {
+    const lastMessage = body.messages[body.messages.length - 1];
+    logContent += `【最后一条消息详情】\n`;
+    logContent += `Role: ${lastMessage.role}\n`;
+    
+    if (typeof lastMessage.content === 'string') {
+      logContent += `Content Type: string\n`;
+      logContent += `Content: ${lastMessage.content.substring(0, 500)}${lastMessage.content.length > 500 ? '...(截断)' : ''}\n`;
+    } else if (Array.isArray(lastMessage.content)) {
+      logContent += `Content Type: array (${lastMessage.content.length} 个块)\n`;
+      lastMessage.content.forEach((block, index) => {
+        logContent += `\n  [Block ${index}]\n`;
+        logContent += `  Type: ${block.type}\n`;
+        if (block.type === 'text') {
+          const text = block.text || '';
+          logContent += `  Text: ${text.substring(0, 300)}${text.length > 300 ? '...(截断)' : ''}\n`;
+        } else if (block.type === 'image') {
+          logContent += `  Image Source Type: ${block.source?.type}\n`;
+          logContent += `  Image Media Type: ${block.source?.media_type}\n`;
+          logContent += `  Image Data Length: ${block.source?.data?.length || 0}\n`;
+        } else if (block.type === 'tool_result') {
+          logContent += `  Tool Use ID: ${block.tool_use_id}\n`;
+          logContent += `  Is Error: ${block.is_error}\n`;
+          const content = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+          logContent += `  Content: ${content.substring(0, 300)}${content.length > 300 ? '...(截断)' : ''}\n`;
+        } else if (block.type === 'tool_use') {
+          logContent += `  Tool Name: ${block.name}\n`;
+          logContent += `  Tool ID: ${block.id}\n`;
+          logContent += `  Input: ${JSON.stringify(block.input).substring(0, 200)}\n`;
+        } else {
+          // 记录未知类型的完整内容
+          logContent += `  Raw: ${JSON.stringify(block).substring(0, 500)}\n`;
+        }
+      });
+    }
+  }
+  
+  logContent += `\n${separator}\n`;
+  
+  fs.appendFileSync(RAW_REQUEST_LOG_FILE, logContent, 'utf8');
+  
+  // 保存完整的原始请求体到单独的 JSON 文件（每次覆盖，只保留最新一次）
+  const fullRequestFile = path.join(LOGS_DIR, 'last-raw-request.json');
+  fs.writeFileSync(fullRequestFile, JSON.stringify(body, null, 2), 'utf8');
+}
+
+/**
  * Claude API 兼容端点: /v1/messages
  */
 app.post('/v1/messages', async (req, res) => {
   log('\n========== 收到 /v1/messages 请求 ==========');
   log(`请求体大小: ${JSON.stringify(req.body).length} 字节`);
   log('==========================================\n');
+  
+  // 记录原始请求到单独的日志文件
+  logRawRequest(req);
   
   try {
     const {
@@ -629,21 +706,29 @@ app.post('/v1/messages', async (req, res) => {
 
     const messageId = `msg_${uuidv4().replace(/-/g, '')}`;
 
-    res.write(`event: message_start\ndata: ${JSON.stringify({
-      type: 'message_start',
-      message: { id: messageId, type: 'message', role: 'assistant', content: [], model: model, usage: { input_tokens: 0, output_tokens: 0 } }
-    })}\n\n`);
-
-    res.write(`event: content_block_start\ndata: ${JSON.stringify({
-      type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' }
-    })}\n\n`);
-
+    // 延迟发送开始事件，等收到第一个实际内容后再发
+    let streamStarted = false;
     let currentToolIndex = 0;
     let toolIndexMap = {};
     let textBlockEnded = false;
     let hasTextContent = false;  // 跟踪是否有文本内容
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+
+    // 发送流开始事件的辅助函数
+    const ensureStreamStarted = () => {
+      if (!streamStarted) {
+        streamStarted = true;
+        res.write(`event: message_start\ndata: ${JSON.stringify({
+          type: 'message_start',
+          message: { id: messageId, type: 'message', role: 'assistant', content: [], model: model, usage: { input_tokens: 0, output_tokens: 0 } }
+        })}\n\n`);
+
+        res.write(`event: content_block_start\ndata: ${JSON.stringify({
+          type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' }
+        })}\n\n`);
+      }
+    };
 
     const result = await kiroClient.chat(userMessage, {
       modelId: kiroModelId,
@@ -654,11 +739,15 @@ app.post('/v1/messages', async (req, res) => {
       images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
+          // 收到第一个内容时才发送开始事件
+          ensureStreamStarted();
           hasTextContent = true;  // 标记有文本内容
           res.write(`event: content_block_delta\ndata: ${JSON.stringify({
             type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.data }
           })}\n\n`);
         } else if (chunk.type === 'tool_use_start') {
+          // 工具调用开始时也要确保流已启动
+          ensureStreamStarted();
           // 如果开始工具调用但还没有文本内容，注入占位文本
           if (!hasTextContent && !textBlockEnded) {
             const placeholderText = '​';  // 零宽空格，不可见但有内容
@@ -705,6 +794,9 @@ app.post('/v1/messages', async (req, res) => {
     totalOutputTokens = result.usage?.output_tokens || 0;
 
     const hasToolUses = result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0;
+    
+    // 如果流还没开始（没有任何内容），现在发送开始事件
+    ensureStreamStarted();
     
     if (!textBlockEnded) {
       res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
