@@ -198,8 +198,8 @@ class KiroClient {
         let contextUsage = null;
         let binaryBuffer = Buffer.alloc(0);  // 使用 Buffer 累积二进制数据
         let toolCalls = {};  // 累积工具调用数据
-        let inputTokens = 0;  // 输入 token 计数
-        let outputTokens = 0; // 输出 token 计数
+        // 上下文窗口大小（用于从 contextUsagePercentage 计算 input_tokens）
+        const MAX_CONTEXT_TOKENS = 200000;
 
         response.data.on('data', (chunk) => {
           logToFile(
@@ -322,20 +322,18 @@ class KiroClient {
                   }
                 }
                 
-                // Token 计数信息
+                // Token 计数信息（Kiro 可能返回，但我们主要用 contextUsagePercentage）
                 if (data.inputTokenCount !== undefined) {
-                  inputTokens = data.inputTokenCount;
                   logToFile(
-                    `[调试] 输入 token 数: ${inputTokens}`,
-                    `[Kiro] 输入 tokens: ${inputTokens}`
+                    `[调试] Kiro 返回输入 token 数: ${data.inputTokenCount}`,
+                    `[Kiro] Kiro 输入 tokens: ${data.inputTokenCount}`
                   );
                 }
                 
                 if (data.outputTokenCount !== undefined) {
-                  outputTokens = data.outputTokenCount;
                   logToFile(
-                    `[调试] 输出 token 数: ${outputTokens}`,
-                    `[Kiro] 输出 tokens: ${outputTokens}`
+                    `[调试] Kiro 返回输出 token 数: ${data.outputTokenCount}`,
+                    `[Kiro] Kiro 输出 tokens: ${data.outputTokenCount}`
                   );
                 }
                 
@@ -411,15 +409,34 @@ class KiroClient {
             );
           }
           
-          // 如果 Kiro 没有返回 token 计数，使用估算值
-          if (inputTokens === 0 && meteringData?.usage) {
-            // 从 credit 估算（非常粗略）
-            inputTokens = Math.round(meteringData.usage * 2000);
+          // 计算 input_tokens：使用 contextUsagePercentage
+          let inputTokens = 0;
+          if (contextUsage && contextUsage.contextUsagePercentage !== undefined) {
+            inputTokens = Math.round(MAX_CONTEXT_TOKENS * contextUsage.contextUsagePercentage / 100);
+            logToFile(
+              `[调试] 从 contextUsagePercentage (${contextUsage.contextUsagePercentage}%) 计算 input_tokens: ${inputTokens}`,
+              `[Kiro] input_tokens: ${inputTokens} (${contextUsage.contextUsagePercentage}%)`
+            );
           }
-          if (outputTokens === 0 && fullContent) {
-            // 按字符数估算（约 4 字符 = 1 token）
-            outputTokens = Math.round(fullContent.length / 4);
+          
+          // 计算 output_tokens：使用 _estimateTokens 估算
+          let outputTokens = 0;
+          // 文本部分
+          if (fullContent) {
+            outputTokens += this._estimateTokens(fullContent);
           }
+          // 工具调用部分
+          for (const tc of toolUses) {
+            outputTokens += this._estimateTokens(tc.name);
+            if (tc.input) {
+              outputTokens += this._estimateTokens(JSON.stringify(tc.input));
+            }
+            outputTokens += 10; // 固定开销
+          }
+          logToFile(
+            `[调试] 估算 output_tokens: ${outputTokens}`,
+            `[Kiro] output_tokens: ${outputTokens}`
+          );
           
           resolve({
             content: fullContent,
@@ -540,7 +557,8 @@ class KiroClient {
       console.log('[DEBUG] 请求体:', JSON.stringify(conversationState, null, 2));
     }
 
-    return this.generateAssistantResponse(conversationState, options.onChunk);
+    // 调用 API
+    return await this.generateAssistantResponse(conversationState, options.onChunk);
   }
 
   /**
@@ -629,6 +647,38 @@ class KiroClient {
     
     // 不要在流式响应中过滤，让完整内容累积后统一处理
     return content;
+  }
+
+  /**
+   * 智能估算文本的 token 数量
+   * 区分中文、英文和代码，使用不同的估算系数
+   * @param {string} text - 要估算的文本
+   * @returns {number} 估算的 token 数
+   */
+  _estimateTokens(text) {
+    if (!text || typeof text !== 'string') return 0;
+    
+    // 统计中文字符数（包括中文标点）
+    const chineseChars = (text.match(/[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]/g) || []).length;
+    
+    // 统计英文单词数（连续的字母数字）
+    const englishWords = (text.match(/[a-zA-Z0-9]+/g) || []).length;
+    
+    // 统计特殊符号和标点（非中文非英文字母数字）
+    const symbols = (text.match(/[^\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\s\w]/g) || []).length;
+    
+    // 估算规则：
+    // - 中文：约 1.5 tokens/字符（Claude 对中文的 tokenization）
+    // - 英文单词：约 1.3 tokens/单词（考虑到子词分割）
+    // - 符号：约 1 token/符号
+    const estimatedTokens = Math.round(
+      chineseChars * 1.5 +
+      englishWords * 1.3 +
+      symbols * 1
+    );
+    
+    // 至少返回 1
+    return Math.max(1, estimatedTokens);
   }
 
   /**

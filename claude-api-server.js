@@ -805,13 +805,13 @@ app.post('/v1/messages', async (req, res) => {
       res.write(`event: message_delta\ndata: ${JSON.stringify({ 
         type: 'message_delta', 
         delta: { stop_reason: 'tool_use', stop_sequence: null }, 
-        usage: { output_tokens: totalOutputTokens } 
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens } 
       })}\n\n`);
     } else {
       res.write(`event: message_delta\ndata: ${JSON.stringify({ 
         type: 'message_delta', 
         delta: { stop_reason: 'end_turn', stop_sequence: null }, 
-        usage: { output_tokens: totalOutputTokens } 
+        usage: { input_tokens: totalInputTokens, output_tokens: totalOutputTokens } 
       })}\n\n`);
     }
     
