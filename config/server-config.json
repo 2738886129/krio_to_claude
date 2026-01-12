@@ -16,5 +16,10 @@
     "maxFreeSockets": 10,
     "socketTimeout": 60000,
     "requestTimeout": 30000
+  },
+  "account": {
+    "multiAccountEnabled": true,
+    "strategy": "auto",
+    "autoSwitchOnError": true
   }
 }

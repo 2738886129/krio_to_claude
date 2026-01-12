@@ -1,6 +1,7 @@
 const express = require('express');
 const KiroClient = require('./KiroClient');
 const { loadToken, loadTokenWithRefresh, loadTokenInfo, needsRefresh } = require('./loadToken');
+const { getBestAccountToken, getAccountToken, accountNeedsRefresh, findAccountById, shouldSwitchAccount, switchToNextAccount, getAvailableAccounts } = require('./loadMultiAccount');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
@@ -205,7 +206,8 @@ let serverConfig = {
   server: { host: '0.0.0.0', port: 3000 },
   stream: { chunkSize: 4 },
   token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 },
-  connectionPool: { maxSockets: 20, maxFreeSockets: 10, socketTimeout: 60000, requestTimeout: 30000 }
+  connectionPool: { maxSockets: 20, maxFreeSockets: 10, socketTimeout: 60000, requestTimeout: 30000 },
+  account: { multiAccountEnabled: false, strategy: 'auto', autoSwitchOnError: true }
 };
 
 try {
@@ -214,6 +216,7 @@ try {
   log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
   log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
   log(`   连接池配置: maxSockets=${serverConfig.connectionPool.maxSockets}, maxFreeSockets=${serverConfig.connectionPool.maxFreeSockets}, socketTimeout=${serverConfig.connectionPool.socketTimeout}ms`);
+  log(`   账号配置: 多账号模式=${serverConfig.account.multiAccountEnabled ? '启用' : '禁用'}, 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
 } catch (error) {
   log('⚠️ 无法加载服务器配置，使用默认值');
 }
@@ -255,6 +258,7 @@ function mapModelId(claudeModelId) {
 // 初始化 Kiro 客户端
 let kiroClient;
 let currentToken;
+let currentAccount = null; // 当前使用的账号（多账号模式）
 let refreshTimer = null;
 let refreshRetryCount = 0;
 
@@ -272,12 +276,45 @@ function getNextRefreshDelay(expiresAt) {
 }
 
 /**
+ * 获取最大重试次数（等于可用账号数量）
+ */
+function getMaxRetries() {
+  if (!serverConfig.account.multiAccountEnabled || !serverConfig.account.autoSwitchOnError) {
+    return 0;
+  }
+  
+  const availableCount = getAvailableAccounts().length;
+  return availableCount;
+}
+
+/**
  * 后台刷新 Token（不阻塞请求）
  */
 async function backgroundRefreshToken() {
   try {
     log('🔄 后台刷新 Token...');
-    const newToken = await loadTokenWithRefresh({ bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 });
+    
+    let newToken;
+    
+    if (serverConfig.account.multiAccountEnabled) {
+      // 多账号模式：刷新当前账号
+      if (currentAccount) {
+        newToken = await getAccountToken(currentAccount.id, { 
+          bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 
+        });
+        // 重新获取账号信息（可能已更新）
+        currentAccount = findAccountById(currentAccount.id);
+        log(`✅ 账号 ${currentAccount.email} Token 后台刷新成功`);
+      } else {
+        log('⚠️ 当前没有选中的账号，跳过刷新');
+        return;
+      }
+    } else {
+      // 单账号模式
+      newToken = await loadTokenWithRefresh({ 
+        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 
+      });
+    }
     
     if (newToken && newToken !== currentToken) {
       currentToken = newToken;
@@ -319,9 +356,21 @@ function scheduleNextRefresh() {
   }
   
   try {
-    const tokenInfo = loadTokenInfo();
-    if (tokenInfo.expiresAt) {
-      const delay = getNextRefreshDelay(tokenInfo.expiresAt);
+    let expiresAt;
+    
+    if (serverConfig.account.multiAccountEnabled) {
+      // 多账号模式：使用当前账号的过期时间
+      if (currentAccount && currentAccount.credentials && currentAccount.credentials.expiresAt) {
+        expiresAt = currentAccount.credentials.expiresAt;
+      }
+    } else {
+      // 单账号模式
+      const tokenInfo = loadTokenInfo();
+      expiresAt = tokenInfo.expiresAt;
+    }
+    
+    if (expiresAt) {
+      const delay = getNextRefreshDelay(expiresAt);
       const nextRefreshTime = new Date(Date.now() + delay);
       log(`⏰ 下次 Token 刷新时间: ${nextRefreshTime.toLocaleString('zh-CN')} (${Math.round(delay / 1000 / 60)} 分钟后)`);
       refreshTimer = setTimeout(backgroundRefreshToken, delay);
@@ -332,29 +381,59 @@ function scheduleNextRefresh() {
 }
 
 // 同步初始化
-try {
-  const BEARER_TOKEN = loadToken();
-  currentToken = BEARER_TOKEN;
-  kiroClient = new KiroClient(BEARER_TOKEN, {
-    maxSockets: serverConfig.connectionPool.maxSockets,
-    maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
-    socketTimeout: serverConfig.connectionPool.socketTimeout,
-    timeout: serverConfig.connectionPool.requestTimeout
-  });
-  log('✅ Kiro 客户端初始化成功');
-  
-  // 检查是否需要立即刷新，否则设置定时器
-  const tokenInfo = loadTokenInfo();
-  if (needsRefresh(tokenInfo, serverConfig.token.refreshBufferMinutes * 60)) {
-    log('⚠️ Token 已过期或即将过期，立即刷新');
-    backgroundRefreshToken();
-  } else {
-    scheduleNextRefresh();
+(async () => {
+  try {
+    let BEARER_TOKEN;
+    
+    if (serverConfig.account.multiAccountEnabled) {
+      // 多账号模式：选择最佳账号
+      log('🔄 多账号模式已启用，正在选择最佳账号...');
+      const result = await getBestAccountToken({
+        strategy: serverConfig.account.strategy,
+        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
+      });
+      BEARER_TOKEN = result.token;
+      currentAccount = result.account;
+      log(`✅ 已选择账号: ${currentAccount.email}`);
+      log(`   用户ID: ${currentAccount.userId}`);
+      log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+      log(`   额度: ${currentAccount.usage?.current || 0}/${currentAccount.usage?.limit || 0}`);
+    } else {
+      // 单账号模式
+      log('🔄 单账号模式，从 kiro-auth-token.json 加载...');
+      BEARER_TOKEN = loadToken();
+    }
+    
+    currentToken = BEARER_TOKEN;
+    kiroClient = new KiroClient(BEARER_TOKEN, {
+      maxSockets: serverConfig.connectionPool.maxSockets,
+      maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+      socketTimeout: serverConfig.connectionPool.socketTimeout,
+      timeout: serverConfig.connectionPool.requestTimeout
+    });
+    log('✅ Kiro 客户端初始化成功');
+    
+    // 检查是否需要立即刷新，否则设置定时器
+    let needsRefreshNow = false;
+    
+    if (serverConfig.account.multiAccountEnabled) {
+      needsRefreshNow = accountNeedsRefresh(currentAccount, serverConfig.token.refreshBufferMinutes * 60);
+    } else {
+      const tokenInfo = loadTokenInfo();
+      needsRefreshNow = needsRefresh(tokenInfo, serverConfig.token.refreshBufferMinutes * 60);
+    }
+    
+    if (needsRefreshNow) {
+      log('⚠️ Token 已过期或即将过期，立即刷新');
+      backgroundRefreshToken();
+    } else {
+      scheduleNextRefresh();
+    }
+  } catch (error) {
+    logError('Kiro 客户端初始化失败', error);
+    process.exit(1);
   }
-} catch (error) {
-  logError('Kiro 客户端初始化失败', error);
-  process.exit(1);
-}
+})();
 
 /**
  * 智能分段保留 description 的关键内容
@@ -1014,14 +1093,79 @@ app.post('/v1/messages', async (req, res) => {
       // 记录 Kiro API 请求
       logKiroRequest(conversationState);
       
-      const result = await kiroClient.chat(userMessage, {
-        modelId: kiroModelId,
-        conversationId,
-        history,
-        tools: kiroTools.length > 0 ? kiroTools : undefined,
-        toolResults: toolResults.length > 0 ? toolResults : undefined,
-        images: images.length > 0 ? images : undefined
-      });
+      let result;
+      let retryCount = 0;
+      // 计算最大重试次数：等于可用账号数量
+      const maxRetries = getMaxRetries();
+      
+      if (maxRetries > 0) {
+        log(`[重试配置] 可用账号数: ${maxRetries}, 将尝试所有账号直到成功`);
+      }
+      
+      while (retryCount <= maxRetries) {
+        try {
+          result = await kiroClient.chat(userMessage, {
+            modelId: kiroModelId,
+            conversationId,
+            history,
+            tools: kiroTools.length > 0 ? kiroTools : undefined,
+            toolResults: toolResults.length > 0 ? toolResults : undefined,
+            images: images.length > 0 ? images : undefined
+          });
+          
+          // 请求成功，跳出循环
+          break;
+          
+        } catch (error) {
+          // 检查是否应该切换账号
+          if (serverConfig.account.multiAccountEnabled && 
+              serverConfig.account.autoSwitchOnError &&
+              currentAccount && 
+              shouldSwitchAccount(error) && 
+              retryCount < maxRetries) {
+            
+            log(`⚠️ 检测到账号问题: ${error.message}`);
+            log(`🔄 尝试切换账号 (已尝试 ${retryCount + 1}/${maxRetries + 1} 个账号)...`);
+            
+            // 切换到新账号
+            const switchResult = await switchToNextAccount(currentAccount.id, serverConfig.account.strategy);
+            
+            if (switchResult) {
+              // 切换成功，更新全局变量
+              currentToken = switchResult.token;
+              currentAccount = switchResult.account;
+              
+              // 重新创建客户端
+              kiroClient = new KiroClient(currentToken, {
+                maxSockets: serverConfig.connectionPool.maxSockets,
+                maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+                socketTimeout: serverConfig.connectionPool.socketTimeout,
+                timeout: serverConfig.connectionPool.requestTimeout
+              });
+              
+              log(`✅ 已切换到账号: ${currentAccount.email}`);
+              log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+              
+              // 重新设置刷新定时器
+              scheduleNextRefresh();
+              
+              // 增加重试计数，继续循环
+              retryCount++;
+              continue;
+            } else {
+              // 切换失败（没有其他可用账号），抛出原始错误
+              log(`❌ 无法切换账号，没有其他可用账号`);
+              throw error;
+            }
+          } else {
+            // 不应该切换账号，或者已达到最大重试次数，抛出错误
+            if (retryCount >= maxRetries && maxRetries > 0) {
+              log(`❌ 已尝试所有可用账号 (${maxRetries + 1} 个)，全部失败`);
+            }
+            throw error;
+          }
+        }
+      }
       
       // 记录 Kiro API 响应
       logKiroResponse(result, false);
@@ -1034,9 +1178,6 @@ app.post('/v1/messages', async (req, res) => {
       }
       if (result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0) {
         contentBlocks.push(...result.parsedContent.toolUses);
-      }
-      if (contentBlocks.length === 0 && result.content) {
-        contentBlocks.push({ type: 'text', text: result.content });
       }
 
       const response = {
@@ -1108,90 +1249,159 @@ app.post('/v1/messages', async (req, res) => {
     // 记录 Kiro API 请求
     logKiroRequest(conversationState);
 
-    const result = await kiroClient.chat(userMessage, {
-      modelId: kiroModelId,
-      conversationId,
-      history,
-      tools: kiroTools.length > 0 ? kiroTools : undefined,
-      toolResults: toolResults.length > 0 ? toolResults : undefined,
-      images: images.length > 0 ? images : undefined,
-      onChunk: (chunk) => {
-        if (chunk.type === 'content') {
-          // 有文本内容时才创建文本块
-          ensureTextBlockStarted();
-          
-          // 收集文本内容用于日志
-          collectedTextContent += chunk.data;
-          
-          // 将大块内容拆分成小块，模拟流式打字效果
-          const text = chunk.data;
-          const chunkSize = serverConfig.stream.chunkSize;
-          for (let i = 0; i < text.length; i += chunkSize) {
-            const smallChunk = text.slice(i, i + chunkSize);
-            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
-              type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: smallChunk }
-            })}\n\n`);
-          }
-        } else if (chunk.type === 'tool_use_start') {
-          ensureStreamStarted();
-          // 如果有文本块且未结束，先结束它
-          if (textBlockStarted && !textBlockEnded) {
-            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
-            textBlockEnded = true;
-          }
-          
-          currentToolIndex++;
-          toolIndexMap[chunk.toolUseId] = currentToolIndex;
-          
-          // 收集工具调用信息用于日志
-          collectedToolUses.push({
-            id: chunk.toolUseId,
-            name: chunk.name,
-            input: {},
-            inputJson: ''
-          });
-          
-          log(`[流式响应] 工具调用开始: ${chunk.name} (${chunk.toolUseId}) index=${currentToolIndex}`);
-          
-          res.write(`event: content_block_start\ndata: ${JSON.stringify({
-            type: 'content_block_start',
-            index: currentToolIndex,
-            content_block: { type: 'tool_use', id: chunk.toolUseId, name: chunk.name, input: {} }
-          })}\n\n`);
-        } else if (chunk.type === 'tool_use_delta') {
-          const toolIndex = toolIndexMap[chunk.toolUseId];
-          if (toolIndex !== undefined && chunk.inputDelta) {
-            // 收集工具输入用于日志
-            const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
-            if (tool) {
-              tool.inputJson += chunk.inputDelta;
-            }
-            
-            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
-              type: 'content_block_delta',
-              index: toolIndex,
-              delta: { type: 'input_json_delta', partial_json: chunk.inputDelta }
-            })}\n\n`);
-          }
-        } else if (chunk.type === 'tool_use_stop') {
-          const toolIndex = toolIndexMap[chunk.toolUseId];
-          if (toolIndex !== undefined) {
-            // 解析工具输入 JSON
-            const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
-            if (tool && tool.inputJson) {
-              try {
-                tool.input = JSON.parse(tool.inputJson);
-              } catch (e) {
-                tool.input = { _raw: tool.inputJson };
+    // 流式响应的重试逻辑
+    let result;
+    let retryCount = 0;
+    const maxRetries = getMaxRetries();
+    
+    if (maxRetries > 0) {
+      log(`[流式重试配置] 可用账号数: ${maxRetries}, 将尝试所有账号直到成功`);
+    }
+    
+    while (retryCount <= maxRetries) {
+      try {
+        result = await kiroClient.chat(userMessage, {
+          modelId: kiroModelId,
+          conversationId,
+          history,
+          tools: kiroTools.length > 0 ? kiroTools : undefined,
+          toolResults: toolResults.length > 0 ? toolResults : undefined,
+          images: images.length > 0 ? images : undefined,
+          onChunk: (chunk) => {
+            if (chunk.type === 'content') {
+              // 有文本内容时才创建文本块
+              ensureTextBlockStarted();
+              
+              // 收集文本内容用于日志
+              collectedTextContent += chunk.data;
+              
+              // 将大块内容拆分成小块，模拟流式打字效果
+              const text = chunk.data;
+              const chunkSize = serverConfig.stream.chunkSize;
+              for (let i = 0; i < text.length; i += chunkSize) {
+                const smallChunk = text.slice(i, i + chunkSize);
+                res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                  type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: smallChunk }
+                })}\n\n`);
+              }
+            } else if (chunk.type === 'tool_use_start') {
+              ensureStreamStarted();
+              // 如果有文本块且未结束，先结束它
+              if (textBlockStarted && !textBlockEnded) {
+                res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+                textBlockEnded = true;
+              }
+              
+              currentToolIndex++;
+              toolIndexMap[chunk.toolUseId] = currentToolIndex;
+              
+              // 收集工具调用信息用于日志
+              collectedToolUses.push({
+                id: chunk.toolUseId,
+                name: chunk.name,
+                input: {},
+                inputJson: ''
+              });
+              
+              log(`[流式响应] 工具调用开始: ${chunk.name} (${chunk.toolUseId}) index=${currentToolIndex}`);
+              
+              res.write(`event: content_block_start\ndata: ${JSON.stringify({
+                type: 'content_block_start',
+                index: currentToolIndex,
+                content_block: { type: 'tool_use', id: chunk.toolUseId, name: chunk.name, input: {} }
+              })}\n\n`);
+            } else if (chunk.type === 'tool_use_delta') {
+              const toolIndex = toolIndexMap[chunk.toolUseId];
+              if (toolIndex !== undefined && chunk.inputDelta) {
+                // 收集工具输入用于日志
+                const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
+                if (tool) {
+                  tool.inputJson += chunk.inputDelta;
+                }
+                
+                res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+                  type: 'content_block_delta',
+                  index: toolIndex,
+                  delta: { type: 'input_json_delta', partial_json: chunk.inputDelta }
+                })}\n\n`);
+              }
+            } else if (chunk.type === 'tool_use_stop') {
+              const toolIndex = toolIndexMap[chunk.toolUseId];
+              if (toolIndex !== undefined) {
+                // 解析工具输入 JSON
+                const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
+                if (tool && tool.inputJson) {
+                  try {
+                    tool.input = JSON.parse(tool.inputJson);
+                  } catch (e) {
+                    tool.input = { _raw: tool.inputJson };
+                  }
+                }
+                
+                log(`[流式响应] 工具调用结束: ${chunk.name} index=${toolIndex}`);
+                res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: toolIndex })}\n\n`);
               }
             }
-            
-            log(`[流式响应] 工具调用结束: ${chunk.name} index=${toolIndex}`);
-            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: toolIndex })}\n\n`);
           }
+        });
+        
+        // 请求成功，跳出循环
+        break;
+        
+      } catch (error) {
+        // 检查是否应该切换账号
+        // 注意：流式响应只能在流开始之前切换，一旦开始发送数据就无法切换了
+        if (!streamStarted && 
+            serverConfig.account.multiAccountEnabled && 
+            serverConfig.account.autoSwitchOnError &&
+            currentAccount && 
+            shouldSwitchAccount(error) && 
+            retryCount < maxRetries) {
+          
+          log(`⚠️ [流式] 检测到账号问题: ${error.message}`);
+          log(`🔄 [流式] 尝试切换账号 (已尝试 ${retryCount + 1}/${maxRetries + 1} 个账号)...`);
+          
+          // 切换到新账号
+          const switchResult = await switchToNextAccount(currentAccount.id, serverConfig.account.strategy);
+          
+          if (switchResult) {
+            // 切换成功，更新全局变量
+            currentToken = switchResult.token;
+            currentAccount = switchResult.account;
+            
+            // 重新创建客户端
+            kiroClient = new KiroClient(currentToken, {
+              maxSockets: serverConfig.connectionPool.maxSockets,
+              maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+              socketTimeout: serverConfig.connectionPool.socketTimeout,
+              timeout: serverConfig.connectionPool.requestTimeout
+            });
+            
+            log(`✅ [流式] 已切换到账号: ${currentAccount.email}`);
+            log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+            
+            // 重新设置刷新定时器
+            scheduleNextRefresh();
+            
+            // 增加重试计数，继续循环
+            retryCount++;
+            continue;
+          } else {
+            // 切换失败（没有其他可用账号），抛出原始错误
+            log(`❌ [流式] 无法切换账号，没有其他可用账号`);
+            throw error;
+          }
+        } else {
+          // 不应该切换账号，或者已达到最大重试次数，或者流已经开始，抛出错误
+          if (streamStarted) {
+            log(`❌ [流式] 流已开始，无法切换账号`);
+          } else if (retryCount >= maxRetries && maxRetries > 0) {
+            log(`❌ [流式] 已尝试所有可用账号 (${maxRetries + 1} 个)，全部失败`);
+          }
+          throw error;
         }
       }
-    });
+    }
 
     totalInputTokens = result.usage?.input_tokens || 0;
     totalOutputTokens = result.usage?.output_tokens || 0;
