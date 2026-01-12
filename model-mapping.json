@@ -1,0 +1,14 @@
+{
+  "description": "Claude API 模型 ID 到 Kiro API 模型 ID 的映射配置",
+  "mappings": {
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4.5",
+    "claude-haiku-4-5-20251001": "claude-haiku-4.5",
+    "claude-opus-4.5": "claude-opus-4.5"
+  },
+  "defaultModel": "claude-sonnet-4.5",
+  "notes": {
+    "claude-sonnet-4.5": "费率 1.3x，适合复杂代码生成",
+    "claude-haiku-4.5": "费率 0.4x，适合常规编程问题",
+    "claude-opus-4.5": "费率 2.2x，适合高难度算法"
+  }
+}

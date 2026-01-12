@@ -1,5 +1,32 @@
 const axios = require('axios');
 const { v4: uuidv4 } = require('uuid');
+const util = require('util');
+const fs = require('fs');
+const path = require('path');
+
+// 日志文件路径
+const KIRO_LOG_FILE = path.join(__dirname, 'kiro-client-debug.log');
+
+// 初始化日志文件
+fs.writeFileSync(KIRO_LOG_FILE, `=== Kiro Client 日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
+
+// 日志函数 - 同时输出到控制台和文件
+function logToFile(message, consoleMessage = null) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  
+  // 写入文件（详细信息）
+  fs.appendFileSync(KIRO_LOG_FILE, logMessage, 'utf8');
+  
+  // 输出到控制台（简略信息）
+  if (consoleMessage !== null) {
+    console.log(consoleMessage);
+  } else {
+    // 如果没有提供简略信息，输出简化版本
+    const shortMessage = message.length > 100 ? message.substring(0, 100) + '...' : message;
+    console.log(`[Kiro] ${shortMessage}`);
+  }
+}
 
 /**
  * Kiro AI API 客户端
@@ -24,6 +51,31 @@ class KiroClient {
         'Connection': 'close'
       }
     });
+
+    // 添加响应拦截器来捕获错误详情
+    this.client.interceptors.response.use(
+      response => response,
+      async error => {
+        // 如果是 400 错误且响应是流，尝试读取完整内容
+        if (error.response && error.response.status === 400) {
+          if (error.response.data && typeof error.response.data.on === 'function') {
+            // 响应是流，读取完整内容
+            const chunks = [];
+            error.response.data.on('data', chunk => chunks.push(chunk));
+            
+            await new Promise((resolve, reject) => {
+              error.response.data.on('end', resolve);
+              error.response.data.on('error', reject);
+            });
+            
+            const fullData = Buffer.concat(chunks).toString('utf8');
+            console.error('[400 错误原始响应]', fullData);
+            error.response.data = fullData;
+          }
+        }
+        throw error;
+      }
+    );
   }
 
   /**
@@ -114,105 +166,200 @@ class KiroClient {
           headers: this._getHeaders({
             'Content-Type': 'application/json'
           }),
-          responseType: 'stream'
+          responseType: 'stream',
+          validateStatus: function (status) {
+            // 允许所有状态码通过，我们自己处理错误
+            return true;
+          }
         }
       );
+
+      // 检查是否是错误响应
+      if (response.status >= 400) {
+        // 读取流式错误响应
+        return new Promise((resolve, reject) => {
+          let errorBody = '';
+          response.data.on('data', (chunk) => {
+            errorBody += chunk.toString('utf8');
+          });
+          response.data.on('end', () => {
+            console.error(`[Kiro API Error ${response.status}]`, errorBody);
+            reject(new Error(`API Error ${response.status}: ${errorBody || '未知错误'}`));
+          });
+          response.data.on('error', (err) => {
+            reject(new Error(`API Error ${response.status}: ${err.message}`));
+          });
+        });
+      }
 
       return new Promise((resolve, reject) => {
         let fullContent = '';
         let meteringData = null;
         let contextUsage = null;
-        let rawBuffer = Buffer.alloc(0);
+        let binaryBuffer = Buffer.alloc(0);  // 使用 Buffer 累积二进制数据
+        let toolCalls = {};  // 累积工具调用数据
 
         response.data.on('data', (chunk) => {
-          // 累积原始 Buffer
-          rawBuffer = Buffer.concat([rawBuffer, chunk]);
+          logToFile(
+            `[调试] 收到 chunk，长度: ${chunk.length}`,
+            `[Kiro] 收到 chunk: ${chunk.length} 字节`
+          );
           
-          // 转换为字符串
-          const str = rawBuffer.toString('utf8');
+          // 累积二进制数据
+          binaryBuffer = Buffer.concat([binaryBuffer, chunk]);
           
-          // 使用正则表达式查找所有 JSON 对象
-          const jsonRegex = /\{"[^"]+":"[^"]*"\}/g;
-          let match;
-          let lastIndex = 0;
-          
-          while ((match = jsonRegex.exec(str)) !== null) {
-            lastIndex = jsonRegex.lastIndex;
+          // 解析 AWS Event Stream 格式
+          // 格式: [4字节总长度][4字节headers长度][4字节prelude CRC][headers][payload][4字节message CRC]
+          while (binaryBuffer.length >= 12) {  // 最小消息长度: prelude(12) + message CRC(4) = 16
+            const totalLength = binaryBuffer.readUInt32BE(0);
+            const headersLength = binaryBuffer.readUInt32BE(4);
             
-            try {
-              const data = JSON.parse(match[0]);
-              
-              // 内容块
-              if (data.content !== undefined) {
-                fullContent += data.content;
-                if (onChunk) {
-                  onChunk({
-                    type: 'content',
-                    data: data.content
-                  });
-                }
-              }
-              
-              // 费用信息
-              if (data.usage !== undefined) {
-                meteringData = data;
-                if (onChunk) {
-                  onChunk({
-                    type: 'metering',
-                    data: meteringData
-                  });
-                }
-              }
-              
-              // 上下文使用率
-              if (data.contextUsagePercentage !== undefined) {
-                contextUsage = data;
-                if (onChunk) {
-                  onChunk({
-                    type: 'contextUsage',
-                    data: contextUsage
-                  });
-                }
-              }
-            } catch (e) {
-              // JSON 解析失败，忽略
+            // 检查是否有完整的消息
+            if (binaryBuffer.length < totalLength) {
+              break;  // 等待更多数据
             }
-          }
-          
-          // 保留未处理的部分（可能是不完整的 JSON）
-          if (lastIndex > 0) {
-            rawBuffer = Buffer.from(str.substring(lastIndex), 'utf8');
+            
+            // 提取 payload
+            const payloadStart = 12 + headersLength;  // prelude(12) + headers
+            const payloadLength = totalLength - payloadStart - 4;  // 减去 message CRC
+            
+            if (payloadLength > 0) {
+              const payload = binaryBuffer.slice(payloadStart, payloadStart + payloadLength);
+              const payloadStr = payload.toString('utf8');
+              
+              logToFile(
+                `[调试] 解析到 payload: ${payloadStr.substring(0, 200)}`,
+                null
+              );
+              
+              // 尝试解析 JSON
+              try {
+                const data = JSON.parse(payloadStr);
+                
+                // 内容块
+                if (data.content !== undefined) {
+                  fullContent += data.content;
+                  
+                  logToFile(
+                    `[调试] 解析到内容: ${data.content}`,
+                    `[Kiro] +${data.content.length}字符`
+                  );
+                  
+                  if (onChunk) {
+                    onChunk({
+                      type: 'content',
+                      data: data.content
+                    });
+                  }
+                }
+                
+                // 工具调用 - Kiro 返回 JSON 格式的工具调用
+                if (data.name && data.toolUseId) {
+                  // 初始化或更新工具调用
+                  if (!toolCalls[data.toolUseId]) {
+                    toolCalls[data.toolUseId] = {
+                      name: data.name,
+                      toolUseId: data.toolUseId,
+                      input: ''
+                    };
+                    logToFile(
+                      `[调试] 开始工具调用: ${data.name} (${data.toolUseId})`,
+                      `[Kiro] 工具调用: ${data.name}`
+                    );
+                  }
+                  
+                  // 累积 input
+                  if (data.input !== undefined) {
+                    toolCalls[data.toolUseId].input += data.input;
+                  }
+                  
+                  // 工具调用结束
+                  if (data.stop === true) {
+                    logToFile(
+                      `[调试] 工具调用结束: ${data.name}, input: ${toolCalls[data.toolUseId].input}`,
+                      `[Kiro] 工具调用完成: ${data.name}`
+                    );
+                  }
+                }
+                
+                // 费用信息
+                if (data.usage !== undefined) {
+                  meteringData = data;
+                  if (onChunk) {
+                    onChunk({
+                      type: 'metering',
+                      data: meteringData
+                    });
+                  }
+                }
+                
+                // 上下文使用率
+                if (data.contextUsagePercentage !== undefined) {
+                  contextUsage = data;
+                  if (onChunk) {
+                    onChunk({
+                      type: 'contextUsage',
+                      data: contextUsage
+                    });
+                  }
+                }
+              } catch (e) {
+                // 不是 JSON，可能是其他类型的消息
+                logToFile(
+                  `[调试] 非 JSON payload: ${payloadStr.substring(0, 100)}`,
+                  null
+                );
+              }
+            }
+            
+            // 移除已处理的消息
+            binaryBuffer = binaryBuffer.slice(totalLength);
           }
         });
 
         response.data.on('end', () => {
-          // 处理剩余的缓冲区
-          if (rawBuffer.length > 0) {
-            const str = rawBuffer.toString('utf8');
-            const jsonRegex = /\{[^}]+\}/g;
-            let match;
-            
-            while ((match = jsonRegex.exec(str)) !== null) {
-              try {
-                const data = JSON.parse(match[0]);
-                
-                if (data.content !== undefined) {
-                  fullContent += data.content;
-                }
-                if (data.usage !== undefined) {
-                  meteringData = data;
-                }
-                if (data.contextUsagePercentage !== undefined) {
-                  contextUsage = data;
-                }
-              } catch (e) {
-                // 忽略
-              }
+          // 记录完整内容用于调试
+          logToFile(
+            `[调试] 响应结束, fullContent 长度: ${fullContent.length}, 内容: ${fullContent.substring(0, 500)}`,
+            `[Kiro] 响应完成: ${fullContent.length} 字符`
+          );
+          
+          if (fullContent.length === 0 && Object.keys(toolCalls).length === 0) {
+            logToFile(
+              '[调试] 警告：Kiro API 返回了空内容！',
+              '[Kiro] ⚠️ 空响应'
+            );
+          }
+          
+          // 转换工具调用为 Claude API 格式
+          const toolUses = Object.values(toolCalls).map(tc => {
+            let parsedInput = {};
+            try {
+              parsedInput = JSON.parse(tc.input);
+            } catch (e) {
+              parsedInput = { raw: tc.input };
             }
+            return {
+              type: 'tool_use',
+              id: tc.toolUseId,
+              name: tc.name,
+              input: parsedInput
+            };
+          });
+          
+          if (toolUses.length > 0) {
+            logToFile(
+              `[调试] 解析到 ${toolUses.length} 个工具调用`,
+              `[Kiro] 工具调用: ${toolUses.length} 个`
+            );
           }
           
           resolve({
             content: fullContent,
+            parsedContent: {
+              text: fullContent,
+              toolUses: toolUses
+            },
             metering: meteringData,
             contextUsage: contextUsage
           });
@@ -223,6 +370,43 @@ class KiroClient {
         });
       });
     } catch (error) {
+      // 特殊处理：如果是 4xx 或 5xx 错误，尝试读取响应体
+      if (error.response && (error.response.status >= 400)) {
+        let errorBody = '';
+        
+        if (error.response.data) {
+          if (Buffer.isBuffer(error.response.data)) {
+            errorBody = error.response.data.toString('utf8');
+          } else if (typeof error.response.data === 'string') {
+            errorBody = error.response.data;
+          } else if (typeof error.response.data === 'object') {
+            try {
+              // 使用 util.inspect 来正确显示对象
+              errorBody = util.inspect(error.response.data, { depth: 5, colors: false });
+              
+              // 同时尝试提取关键字段
+              if (error.response.data.message) {
+                errorBody = `${error.response.data.message}\n详细: ${errorBody}`;
+              } else if (error.response.data.error) {
+                const errDetail = typeof error.response.data.error === 'string' 
+                  ? error.response.data.error 
+                  : util.inspect(error.response.data.error, { depth: 3 });
+                errorBody = `错误: ${errDetail}\n详细: ${errorBody}`;
+              }
+            } catch (e) {
+              errorBody = String(error.response.data);
+            }
+          } else {
+            errorBody = String(error.response.data);
+          }
+        }
+        
+        // 记录详细错误到日志
+        console.error(`[Kiro API Error ${error.response.status}]`, errorBody);
+        
+        throw new Error(`API Error ${error.response.status} ${error.response.statusText || ''}: ${errorBody || '未知错误'}`);
+      }
+      
       throw this._handleError(error);
     }
   }
@@ -234,6 +418,24 @@ class KiroClient {
    * @returns {Promise<object>} 响应结果
    */
   async chat(message, options = {}) {
+    // 构建 userInputMessageContext
+    const userInputMessageContext = {};
+    
+    // 添加工具定义（如果有）
+    if (options.tools && options.tools.length > 0) {
+      userInputMessageContext.tools = options.tools;
+    }
+    
+    // 添加工具结果（如果有）
+    if (options.toolResults && options.toolResults.length > 0) {
+      userInputMessageContext.toolResults = options.toolResults;
+    }
+    
+    // 合并其他 context
+    if (options.context) {
+      Object.assign(userInputMessageContext, options.context);
+    }
+    
     const conversationState = {
       agentTaskType: options.agentTaskType || 'vibe',
       chatTriggerType: options.chatTriggerType || 'MANUAL',
@@ -243,11 +445,21 @@ class KiroClient {
           content: message,
           modelId: options.modelId || 'claude-sonnet-4.5',
           origin: options.origin || 'AI_EDITOR',
-          userInputMessageContext: options.context || {}
+          userInputMessageContext: userInputMessageContext
         }
       },
       history: options.history || []
     };
+    
+    // 添加 agentContinuationId（如果有）
+    if (options.agentContinuationId) {
+      conversationState.agentContinuationId = options.agentContinuationId;
+    }
+
+    // 调试：打印请求体（可选）
+    if (options.debug) {
+      console.log('[DEBUG] 请求体:', JSON.stringify(conversationState, null, 2));
+    }
 
     return this.generateAssistantResponse(conversationState, options.onChunk);
   }
@@ -271,6 +483,76 @@ class KiroClient {
   }
 
   /**
+   * 解析 XML 格式的工具调用，转换为 Claude API 格式
+   * @param {string} content - 包含 XML 工具调用的内容
+   * @returns {object} { text: string, toolUses: array }
+   */
+  _parseToolCalls(content) {
+    if (!content || typeof content !== 'string') {
+      return { text: content || '', toolUses: [] };
+    }
+
+    const toolUses = [];
+    let textContent = content;
+
+    // 提取 <function_calls> 之前的文本内容
+    const functionCallsMatch = content.match(/([\s\S]*?)<function_calls>/);
+    if (functionCallsMatch) {
+      textContent = functionCallsMatch[1].trim();
+    }
+
+    // 匹配所有 <invoke> 块
+    const invokeRegex = /<invoke name="([^"]+)">([\s\S]*?)<\/invoke>/g;
+    let match;
+
+    while ((match = invokeRegex.exec(content)) !== null) {
+      const toolName = match[1];
+      const invokeContent = match[2];
+      
+      // 提取所有参数
+      const input = {};
+      const paramRegex = /<parameter name="([^"]+)">([^<]*)<\/parameter>/g;
+      let paramMatch;
+      
+      while ((paramMatch = paramRegex.exec(invokeContent)) !== null) {
+        const paramName = paramMatch[1];
+        const paramValue = paramMatch[2];
+        
+        // 尝试解析 JSON 参数
+        try {
+          input[paramName] = JSON.parse(paramValue);
+        } catch (e) {
+          // 如果不是 JSON，就作为字符串
+          input[paramName] = paramValue;
+        }
+      }
+
+      toolUses.push({
+        type: 'tool_use',
+        id: `toolu_${uuidv4().replace(/-/g, '').substring(0, 24)}`,
+        name: toolName,
+        input: input
+      });
+    }
+
+    return { text: textContent, toolUses: toolUses };
+  }
+
+  /**
+   * 过滤掉响应中的工具调用 XML 标签（用于流式响应）
+   * @param {string} content - 原始内容
+   * @returns {string} 过滤后的内容
+   */
+  _filterToolCalls(content) {
+    if (!content || typeof content !== 'string') {
+      return content;
+    }
+    
+    // 不要在流式响应中过滤，让完整内容累积后统一处理
+    return content;
+  }
+
+  /**
    * 错误处理
    */
   _handleError(error) {
@@ -286,8 +568,17 @@ class KiroClient {
       try {
         if (typeof data === 'string') {
           dataStr = data;
+        } else if (Buffer.isBuffer(data)) {
+          dataStr = data.toString('utf8');
         } else if (data && typeof data === 'object') {
-          dataStr = JSON.stringify(data);
+          // 尝试提取关键错误信息
+          if (data.message) {
+            dataStr = data.message;
+          } else if (data.error) {
+            dataStr = typeof data.error === 'string' ? data.error : JSON.stringify(data.error);
+          } else {
+            dataStr = JSON.stringify(data);
+          }
         } else {
           dataStr = String(data);
         }

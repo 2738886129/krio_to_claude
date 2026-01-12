@@ -1,0 +1,9 @@
+
+### 未实现的功能
+
+- ❌ `max_tokens` 限制（Kiro API 不支持）
+- ❌ `temperature` 参数（Kiro API 不支持）
+- ❌ `top_p`, `top_k` 参数
+- ❌ 图片输入（需要扩展）
+- ❌ 工具调用（Function Calling）
+- ❌ Token 计数精确度（使用估算值）
