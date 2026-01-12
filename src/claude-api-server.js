@@ -204,7 +204,8 @@ function formatClaudeError(error, defaultStatus = 500) {
 let serverConfig = {
   server: { host: '0.0.0.0', port: 3000 },
   stream: { chunkSize: 4 },
-  token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 }
+  token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 },
+  connectionPool: { maxSockets: 20, maxFreeSockets: 10, socketTimeout: 60000, requestTimeout: 30000 }
 };
 
 try {
@@ -212,6 +213,7 @@ try {
   serverConfig = { ...serverConfig, ...JSON.parse(configFile) };
   log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
   log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
+  log(`   连接池配置: maxSockets=${serverConfig.connectionPool.maxSockets}, maxFreeSockets=${serverConfig.connectionPool.maxFreeSockets}, socketTimeout=${serverConfig.connectionPool.socketTimeout}ms`);
 } catch (error) {
   log('⚠️ 无法加载服务器配置，使用默认值');
 }
@@ -279,7 +281,12 @@ async function backgroundRefreshToken() {
     
     if (newToken && newToken !== currentToken) {
       currentToken = newToken;
-      kiroClient = new KiroClient(currentToken);
+      kiroClient = new KiroClient(currentToken, {
+        maxSockets: serverConfig.connectionPool.maxSockets,
+        maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+        socketTimeout: serverConfig.connectionPool.socketTimeout,
+        timeout: serverConfig.connectionPool.requestTimeout
+      });
       log('✅ Token 后台刷新成功，客户端已更新');
     }
     
@@ -328,7 +335,12 @@ function scheduleNextRefresh() {
 try {
   const BEARER_TOKEN = loadToken();
   currentToken = BEARER_TOKEN;
-  kiroClient = new KiroClient(BEARER_TOKEN);
+  kiroClient = new KiroClient(BEARER_TOKEN, {
+    maxSockets: serverConfig.connectionPool.maxSockets,
+    maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+    socketTimeout: serverConfig.connectionPool.socketTimeout,
+    timeout: serverConfig.connectionPool.requestTimeout
+  });
   log('✅ Kiro 客户端初始化成功');
   
   // 检查是否需要立即刷新，否则设置定时器

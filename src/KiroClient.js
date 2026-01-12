@@ -74,8 +74,8 @@ class KiroClient {
     // HTTPS 连接池配置
     this.httpsAgent = new https.Agent({
       keepAlive: true,           // 启用 keep-alive 复用连接
-      maxSockets: options.maxSockets || 10,        // 最大并发连接数
-      maxFreeSockets: options.maxFreeSockets || 5, // 空闲连接池大小
+      maxSockets: options.maxSockets || 20,        // 最大并发连接数
+      maxFreeSockets: options.maxFreeSockets || 10, // 空闲连接池大小
       timeout: options.socketTimeout || 60000,     // socket 超时
       scheduling: 'lifo'         // 后进先出，优先复用最近的连接
     });
