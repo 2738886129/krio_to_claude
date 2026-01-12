@@ -198,6 +198,8 @@ class KiroClient {
         let contextUsage = null;
         let binaryBuffer = Buffer.alloc(0);  // 使用 Buffer 累积二进制数据
         let toolCalls = {};  // 累积工具调用数据
+        let inputTokens = 0;  // 输入 token 计数
+        let outputTokens = 0; // 输出 token 计数
 
         response.data.on('data', (chunk) => {
           logToFile(
@@ -255,8 +257,10 @@ class KiroClient {
                 
                 // 工具调用 - Kiro 返回 JSON 格式的工具调用
                 if (data.name && data.toolUseId) {
+                  const isNewTool = !toolCalls[data.toolUseId];
+                  
                   // 初始化或更新工具调用
-                  if (!toolCalls[data.toolUseId]) {
+                  if (isNewTool) {
                     toolCalls[data.toolUseId] = {
                       name: data.name,
                       toolUseId: data.toolUseId,
@@ -266,11 +270,30 @@ class KiroClient {
                       `[调试] 开始工具调用: ${data.name} (${data.toolUseId})`,
                       `[Kiro] 工具调用: ${data.name}`
                     );
+                    
+                    // 流式回调：工具调用开始
+                    if (onChunk) {
+                      onChunk({
+                        type: 'tool_use_start',
+                        toolUseId: data.toolUseId,
+                        name: data.name
+                      });
+                    }
                   }
                   
-                  // 累积 input
+                  // 累积 input 并流式发送
                   if (data.input !== undefined) {
                     toolCalls[data.toolUseId].input += data.input;
+                    
+                    // 流式回调：工具调用输入增量
+                    if (onChunk) {
+                      onChunk({
+                        type: 'tool_use_delta',
+                        toolUseId: data.toolUseId,
+                        name: data.name,
+                        inputDelta: data.input
+                      });
+                    }
                   }
                   
                   // 工具调用结束
@@ -279,7 +302,41 @@ class KiroClient {
                       `[调试] 工具调用结束: ${data.name}, input: ${toolCalls[data.toolUseId].input}`,
                       `[Kiro] 工具调用完成: ${data.name}`
                     );
+                    
+                    // 流式回调：工具调用结束
+                    if (onChunk) {
+                      let parsedInput = {};
+                      try {
+                        parsedInput = JSON.parse(toolCalls[data.toolUseId].input);
+                      } catch (e) {
+                        parsedInput = { raw: toolCalls[data.toolUseId].input };
+                      }
+                      
+                      onChunk({
+                        type: 'tool_use_stop',
+                        toolUseId: data.toolUseId,
+                        name: data.name,
+                        input: parsedInput
+                      });
+                    }
                   }
+                }
+                
+                // Token 计数信息
+                if (data.inputTokenCount !== undefined) {
+                  inputTokens = data.inputTokenCount;
+                  logToFile(
+                    `[调试] 输入 token 数: ${inputTokens}`,
+                    `[Kiro] 输入 tokens: ${inputTokens}`
+                  );
+                }
+                
+                if (data.outputTokenCount !== undefined) {
+                  outputTokens = data.outputTokenCount;
+                  logToFile(
+                    `[调试] 输出 token 数: ${outputTokens}`,
+                    `[Kiro] 输出 tokens: ${outputTokens}`
+                  );
                 }
                 
                 // 费用信息
@@ -354,6 +411,16 @@ class KiroClient {
             );
           }
           
+          // 如果 Kiro 没有返回 token 计数，使用估算值
+          if (inputTokens === 0 && meteringData?.usage) {
+            // 从 credit 估算（非常粗略）
+            inputTokens = Math.round(meteringData.usage * 2000);
+          }
+          if (outputTokens === 0 && fullContent) {
+            // 按字符数估算（约 4 字符 = 1 token）
+            outputTokens = Math.round(fullContent.length / 4);
+          }
+          
           resolve({
             content: fullContent,
             parsedContent: {
@@ -361,7 +428,11 @@ class KiroClient {
               toolUses: toolUses
             },
             metering: meteringData,
-            contextUsage: contextUsage
+            contextUsage: contextUsage,
+            usage: {
+              input_tokens: inputTokens,
+              output_tokens: outputTokens
+            }
           });
         });
 

@@ -46,6 +46,69 @@ fs.writeFileSync(LOG_FILE, `=== 服务器启动于 ${new Date().toISOString()} =
 fs.writeFileSync(ERROR_LOG_FILE, `=== 错误日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
 log('日志文件已初始化: ' + LOG_FILE);
 
+/**
+ * Claude API 错误类型映射
+ * 将 Kiro/HTTP 错误转换为 Claude API 标准错误格式
+ */
+const ERROR_TYPES = {
+  400: 'invalid_request_error',
+  401: 'authentication_error',
+  403: 'permission_error',
+  404: 'not_found_error',
+  429: 'rate_limit_error',
+  500: 'api_error',
+  502: 'api_error',
+  503: 'overloaded_error',
+  504: 'api_error'
+};
+
+/**
+ * 将错误转换为 Claude API 格式
+ */
+function formatClaudeError(error, defaultStatus = 500) {
+  let status = defaultStatus;
+  let errorType = 'api_error';
+  let message = error.message || '服务器内部错误';
+  
+  // 从错误消息中提取状态码
+  const statusMatch = message.match(/API Error (\d+)/);
+  if (statusMatch) {
+    status = parseInt(statusMatch[1], 10);
+  }
+  
+  // 根据状态码确定错误类型
+  errorType = ERROR_TYPES[status] || 'api_error';
+  
+  // 特殊错误消息处理
+  if (message.includes('token') || message.includes('Token') || message.includes('unauthorized')) {
+    errorType = 'authentication_error';
+    status = 401;
+  } else if (message.includes('rate limit') || message.includes('too many')) {
+    errorType = 'rate_limit_error';
+    status = 429;
+  } else if (message.includes('not found')) {
+    errorType = 'not_found_error';
+    status = 404;
+  } else if (message.includes('permission') || message.includes('forbidden')) {
+    errorType = 'permission_error';
+    status = 403;
+  } else if (message.includes('overloaded') || message.includes('capacity')) {
+    errorType = 'overloaded_error';
+    status = 503;
+  }
+  
+  return {
+    status,
+    body: {
+      type: 'error',
+      error: {
+        type: errorType,
+        message: message
+      }
+    }
+  };
+}
+
 // 加载模型映射配置
 let modelMapping = {};
 let defaultModel = 'claude-sonnet-4.5';
@@ -639,8 +702,8 @@ app.post('/v1/messages', async (req, res) => {
         stop_reason: (result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0) ? 'tool_use' : 'end_turn',
         stop_sequence: null,
         usage: {
-          input_tokens: Math.round((result.metering?.usage || 0) * 1000),
-          output_tokens: Math.round((result.content || '').length / 4)
+          input_tokens: result.usage?.input_tokens || 0,
+          output_tokens: result.usage?.output_tokens || 0
         }
       });
     }
@@ -661,6 +724,13 @@ app.post('/v1/messages', async (req, res) => {
       type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' }
     })}\n\n`);
 
+    // 跟踪流式状态
+    let currentToolIndex = 0;
+    let toolIndexMap = {};  // toolUseId -> index 映射
+    let textBlockEnded = false;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+
     const result = await kiroClient.chat(userMessage, {
       modelId: kiroModelId,
       conversationId,
@@ -672,51 +742,77 @@ app.post('/v1/messages', async (req, res) => {
       images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
+          // 文本内容增量
           res.write(`event: content_block_delta\ndata: ${JSON.stringify({
             type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.data }
           })}\n\n`);
+        } else if (chunk.type === 'tool_use_start') {
+          // 工具调用开始 - 先结束文本块（如果还没结束）
+          if (!textBlockEnded) {
+            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+            textBlockEnded = true;
+          }
+          
+          // 分配新的 index
+          currentToolIndex++;
+          toolIndexMap[chunk.toolUseId] = currentToolIndex;
+          
+          log(`[流式响应] 工具调用开始: ${chunk.name} (${chunk.toolUseId}) index=${currentToolIndex}`);
+          
+          // 发送工具调用开始事件
+          res.write(`event: content_block_start\ndata: ${JSON.stringify({
+            type: 'content_block_start',
+            index: currentToolIndex,
+            content_block: { type: 'tool_use', id: chunk.toolUseId, name: chunk.name, input: {} }
+          })}\n\n`);
+        } else if (chunk.type === 'tool_use_delta') {
+          // 工具调用输入增量
+          const toolIndex = toolIndexMap[chunk.toolUseId];
+          if (toolIndex !== undefined && chunk.inputDelta) {
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+              type: 'content_block_delta',
+              index: toolIndex,
+              delta: { type: 'input_json_delta', partial_json: chunk.inputDelta }
+            })}\n\n`);
+          }
+        } else if (chunk.type === 'tool_use_stop') {
+          // 工具调用结束
+          const toolIndex = toolIndexMap[chunk.toolUseId];
+          if (toolIndex !== undefined) {
+            log(`[流式响应] 工具调用结束: ${chunk.name} index=${toolIndex}`);
+            res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: toolIndex })}\n\n`);
+          }
         }
       }
     });
 
+    // 获取 token 计数
+    totalInputTokens = result.usage?.input_tokens || 0;
+    totalOutputTokens = result.usage?.output_tokens || 0;
+
     // result 包含完整响应（包括工具调用）
     const hasToolUses = result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0;
     
-    // 结束文本块
-    res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+    // 如果文本块还没结束，结束它
+    if (!textBlockEnded) {
+      res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
+    }
     
     if (hasToolUses) {
-      log(`[流式响应] 检测到 ${result.parsedContent.toolUses.length} 个工具调用`);
-      
-      // 发送工具调用块
-      let toolIndex = 1;
-      for (const toolUse of result.parsedContent.toolUses) {
-        log(`[流式响应] 发送工具调用: ${toolUse.name} (${toolUse.id})`);
-        
-        // 开始工具调用块
-        res.write(`event: content_block_start\ndata: ${JSON.stringify({
-          type: 'content_block_start',
-          index: toolIndex,
-          content_block: { type: 'tool_use', id: toolUse.id, name: toolUse.name, input: {} }
-        })}\n\n`);
-        
-        // 发送工具调用输入
-        res.write(`event: content_block_delta\ndata: ${JSON.stringify({
-          type: 'content_block_delta',
-          index: toolIndex,
-          delta: { type: 'input_json_delta', partial_json: JSON.stringify(toolUse.input) }
-        })}\n\n`);
-        
-        // 结束工具调用块
-        res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: toolIndex })}\n\n`);
-        
-        toolIndex++;
-      }
+      log(`[流式响应] 共 ${result.parsedContent.toolUses.length} 个工具调用`);
       
       // 发送消息结束，stop_reason 为 tool_use
-      res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 0 } })}\n\n`);
+      res.write(`event: message_delta\ndata: ${JSON.stringify({ 
+        type: 'message_delta', 
+        delta: { stop_reason: 'tool_use', stop_sequence: null }, 
+        usage: { output_tokens: totalOutputTokens } 
+      })}\n\n`);
     } else {
-      res.write(`event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 0 } })}\n\n`);
+      res.write(`event: message_delta\ndata: ${JSON.stringify({ 
+        type: 'message_delta', 
+        delta: { stop_reason: 'end_turn', stop_sequence: null }, 
+        usage: { output_tokens: totalOutputTokens } 
+      })}\n\n`);
     }
     
     res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
@@ -725,10 +821,8 @@ app.post('/v1/messages', async (req, res) => {
   } catch (error) {
     logError('API 请求处理失败', error);
     if (!res.headersSent) {
-      res.status(500).json({
-        type: 'error',
-        error: { type: 'api_error', message: error.message || '服务器内部错误' }
-      });
+      const formattedError = formatClaudeError(error);
+      res.status(formattedError.status).json(formattedError.body);
     }
   }
 });
@@ -746,7 +840,8 @@ app.get('/v1/models', async (req, res) => {
     res.json({ object: 'list', data: models });
   } catch (error) {
     logError('获取模型列表失败', error);
-    res.status(500).json({ type: 'error', error: { type: 'api_error', message: error.message } });
+    const formattedError = formatClaudeError(error);
+    res.status(formattedError.status).json(formattedError.body);
   }
 });
 

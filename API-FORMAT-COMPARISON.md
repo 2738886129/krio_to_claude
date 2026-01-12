@@ -394,3 +394,106 @@ System prompt 作为历史记录的第一对消息：
 1. 从 `media_type` 提取格式（如 `image/jpeg` → `jpeg`）
 2. 将 `source.data` 映射到 `source.bytes`
 3. 图片从 `content` 数组提取到独立的 `images` 数组
+
+
+---
+
+## 11. 错误码映射
+
+### Claude API 错误类型
+| HTTP 状态码 | 错误类型 | 说明 |
+|------------|---------|------|
+| 400 | `invalid_request_error` | 请求格式错误 |
+| 401 | `authentication_error` | 认证失败 |
+| 403 | `permission_error` | 权限不足 |
+| 404 | `not_found_error` | 资源不存在 |
+| 429 | `rate_limit_error` | 请求过于频繁 |
+| 500 | `api_error` | 服务器内部错误 |
+| 503 | `overloaded_error` | 服务过载 |
+
+### 错误响应格式
+```json
+{
+  "type": "error",
+  "error": {
+    "type": "invalid_request_error",
+    "message": "具体错误信息"
+  }
+}
+```
+
+### Kiro 错误到 Claude 错误的映射逻辑
+1. 从 Kiro 错误消息中提取 HTTP 状态码
+2. 根据状态码映射到对应的 Claude 错误类型
+3. 特殊关键词检测：
+   - `token`/`unauthorized` → `authentication_error`
+   - `rate limit`/`too many` → `rate_limit_error`
+   - `not found` → `not_found_error`
+   - `permission`/`forbidden` → `permission_error`
+   - `overloaded`/`capacity` → `overloaded_error`
+
+---
+
+## 12. Token 计数
+
+### Kiro API 返回的计数字段
+```json
+{
+  "inputTokenCount": 1234,
+  "outputTokenCount": 567,
+  "usage": 0.05,
+  "contextUsagePercentage": 7.5
+}
+```
+
+### 转换为 Claude API 格式
+```json
+{
+  "usage": {
+    "input_tokens": 1234,
+    "output_tokens": 567
+  }
+}
+```
+
+### 回退估算逻辑
+如果 Kiro 未返回精确的 token 计数：
+- `input_tokens`: 从 `usage` (credit) 估算，约 `usage * 2000`
+- `output_tokens`: 从输出字符数估算，约 `字符数 / 4`
+
+---
+
+## 13. 流式工具调用
+
+### Claude API 流式工具调用事件序列
+```
+1. message_start
+2. content_block_start (index=0, type=text)
+3. content_block_delta (text_delta) × N
+4. content_block_stop (index=0)
+5. content_block_start (index=1, type=tool_use)
+6. content_block_delta (input_json_delta) × N
+7. content_block_stop (index=1)
+8. message_delta (stop_reason=tool_use)
+9. message_stop
+```
+
+### Kiro API 流式工具调用格式
+```json
+// 工具调用开始
+{"name": "readFile", "toolUseId": "tooluse_xxx"}
+
+// 输入增量（多次）
+{"name": "readFile", "toolUseId": "tooluse_xxx", "input": "{\"path\":"}
+{"name": "readFile", "toolUseId": "tooluse_xxx", "input": "\"test.js\"}"}
+
+// 工具调用结束
+{"name": "readFile", "toolUseId": "tooluse_xxx", "stop": true}
+```
+
+### 转换回调类型
+| Kiro 事件 | 转换后的回调类型 |
+|----------|----------------|
+| 首次出现 toolUseId | `tool_use_start` |
+| input 字段增量 | `tool_use_delta` |
+| stop: true | `tool_use_stop` |
