@@ -641,6 +641,7 @@ app.post('/v1/messages', async (req, res) => {
     let currentToolIndex = 0;
     let toolIndexMap = {};
     let textBlockEnded = false;
+    let hasTextContent = false;  // 跟踪是否有文本内容
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
 
@@ -653,10 +654,19 @@ app.post('/v1/messages', async (req, res) => {
       images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
+          hasTextContent = true;  // 标记有文本内容
           res.write(`event: content_block_delta\ndata: ${JSON.stringify({
             type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.data }
           })}\n\n`);
         } else if (chunk.type === 'tool_use_start') {
+          // 如果开始工具调用但还没有文本内容，注入占位文本
+          if (!hasTextContent && !textBlockEnded) {
+            const placeholderText = '​';  // 零宽空格，不可见但有内容
+            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
+              type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: placeholderText }
+            })}\n\n`);
+            hasTextContent = true;
+          }
           if (!textBlockEnded) {
             res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
             textBlockEnded = true;
