@@ -3,6 +3,7 @@ const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 const util = require('util');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 
 // 日志文件路径
@@ -12,16 +13,38 @@ if (!fs.existsSync(LOGS_DIR)) {
 }
 const KIRO_LOG_FILE = path.join(LOGS_DIR, 'kiro-client-debug.log');
 
-// 初始化日志文件
+// 异步日志队列
+let logQueue = [];
+let isWriting = false;
+
+async function flushLogQueue() {
+  if (isWriting || logQueue.length === 0) return;
+  isWriting = true;
+  
+  const batch = logQueue.splice(0, 100);
+  try {
+    await fsPromises.appendFile(KIRO_LOG_FILE, batch.join(''));
+  } catch (err) {
+    console.error('KiroClient 日志写入失败:', err.message);
+  }
+  
+  isWriting = false;
+  if (logQueue.length > 0) {
+    setImmediate(flushLogQueue);
+  }
+}
+
+// 初始化日志文件（同步，仅启动时）
 fs.writeFileSync(KIRO_LOG_FILE, `=== Kiro Client 日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
 
-// 日志函数 - 同时输出到控制台和文件
+// 日志函数 - 异步写入文件
 function logToFile(message, consoleMessage = null) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}\n`;
   
-  // 写入文件（详细信息）
-  fs.appendFileSync(KIRO_LOG_FILE, logMessage, 'utf8');
+  // 异步写入文件
+  logQueue.push(logMessage);
+  setImmediate(flushLogQueue);
   
   // 输出到控制台（简略信息）
   if (consoleMessage !== null) {

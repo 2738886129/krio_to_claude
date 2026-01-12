@@ -3,6 +3,7 @@ const KiroClient = require('./KiroClient');
 const { loadToken, loadTokenWithRefresh, loadTokenInfo, needsRefresh } = require('./loadToken');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
+const fsPromises = require('fs').promises;
 const path = require('path');
 
 const app = express();
@@ -15,14 +16,88 @@ if (!fs.existsSync(LOGS_DIR)) {
 }
 const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
 const ERROR_LOG_FILE = path.join(LOGS_DIR, 'server-error.log');
-const RAW_REQUEST_LOG_FILE = path.join(LOGS_DIR, 'claude-code-requests.log');
+const CLAUDE_CODE_LOG_FILE = path.join(LOGS_DIR, 'claude-code.log');
+const KIRO_API_LOG_FILE = path.join(LOGS_DIR, 'kiro-api.log');
+
+// 基于 WriteStream 的日志类（内置背压控制）
+class StreamLogger {
+  constructor(filePath) {
+    this.filePath = filePath;
+    this.stream = null;
+    this.draining = false;
+    this.dropCount = 0;  // 统计丢弃的消息数
+  }
+
+  // 初始化文件并创建写入流
+  initSync(content) {
+    // 先同步写入初始内容
+    fs.writeFileSync(this.filePath, content, 'utf8');
+    
+    // 创建追加模式的写入流
+    this.stream = fs.createWriteStream(this.filePath, {
+      flags: 'a',              // 追加模式
+      highWaterMark: 64 * 1024 // 64KB 缓冲区
+    });
+
+    // 背压恢复事件
+    this.stream.on('drain', () => {
+      this.draining = false;
+      if (this.dropCount > 0) {
+        console.warn(`[日志] 背压恢复，期间丢弃了 ${this.dropCount} 条消息`);
+        this.dropCount = 0;
+      }
+    });
+
+    // 错误处理
+    this.stream.on('error', (err) => {
+      console.error(`[日志] 写入流错误 (${this.filePath}):`, err.message);
+    });
+  }
+
+  write(message) {
+    if (!this.stream) {
+      console.error('[日志] 写入流未初始化');
+      return;
+    }
+
+    // 背压控制：缓冲区满时丢弃消息
+    if (this.draining) {
+      this.dropCount++;
+      return;
+    }
+
+    const ok = this.stream.write(message);
+    if (!ok) {
+      this.draining = true;
+    }
+  }
+
+  // 优雅关闭，确保数据刷盘
+  close() {
+    return new Promise((resolve) => {
+      if (this.stream) {
+        this.stream.end(() => {
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
+  }
+}
+
+// 创建日志实例
+const mainLogger = new StreamLogger(LOG_FILE);
+const errorLogger = new StreamLogger(ERROR_LOG_FILE);
+const claudeCodeLogger = new StreamLogger(CLAUDE_CODE_LOG_FILE);
+const kiroApiLogger = new StreamLogger(KIRO_API_LOG_FILE);
 
 // 日志函数
 function log(message) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}\n`;
   console.log(message);
-  fs.appendFileSync(LOG_FILE, logMessage, 'utf8');
+  mainLogger.write(logMessage);
 }
 
 function logObject(label, obj) {
@@ -42,16 +117,18 @@ function logError(message, error = null) {
   errorMessage += '\n';
   console.error(message);
   if (error) console.error('错误详情:', error.message);
-  fs.appendFileSync(ERROR_LOG_FILE, errorMessage, 'utf8');
-  fs.appendFileSync(LOG_FILE, errorMessage, 'utf8');
+  errorLogger.write(errorMessage);
+  mainLogger.write(errorMessage);
 }
 
-// 清空日志文件
-fs.writeFileSync(LOG_FILE, `=== 服务器启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
-fs.writeFileSync(ERROR_LOG_FILE, `=== 错误日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
-fs.writeFileSync(RAW_REQUEST_LOG_FILE, `=== Claude Code 原始请求日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
+// 初始化日志文件（同步，仅启动时）
+mainLogger.initSync(`=== 服务器启动于 ${new Date().toISOString()} ===\n\n`);
+errorLogger.initSync(`=== 错误日志启动于 ${new Date().toISOString()} ===\n\n`);
+claudeCodeLogger.initSync(`=== Claude Code 请求/响应日志启动于 ${new Date().toISOString()} ===\n\n`);
+kiroApiLogger.initSync(`=== Kiro API 请求/响应日志启动于 ${new Date().toISOString()} ===\n\n`);
 log('日志文件已初始化: ' + LOG_FILE);
-log('原始请求日志文件: ' + RAW_REQUEST_LOG_FILE);
+log('Claude Code 日志文件: ' + CLAUDE_CODE_LOG_FILE);
+log('Kiro API 日志文件: ' + KIRO_API_LOG_FILE);
 
 /**
  * Claude API 错误类型映射
@@ -537,11 +614,164 @@ function logRawRequest(req) {
   
   logContent += `\n${separator}\n`;
   
-  fs.appendFileSync(RAW_REQUEST_LOG_FILE, logContent, 'utf8');
+  claudeCodeLogger.write(logContent);
   
-  // 保存完整的原始请求体到单独的 JSON 文件（每次覆盖，只保留最新一次）
+  // 保存完整的原始请求体到单独的 JSON 文件（异步写入）
   const fullRequestFile = path.join(LOGS_DIR, 'last-raw-request.json');
-  fs.writeFileSync(fullRequestFile, JSON.stringify(body, null, 2), 'utf8');
+  fsPromises.writeFile(fullRequestFile, JSON.stringify(body, null, 2), 'utf8')
+    .catch(err => console.error('写入 last-raw-request.json 失败:', err.message));
+}
+
+/**
+ * 记录返回给 Claude Code 客户端的响应
+ */
+function logResponse(responseData, isStream = false) {
+  const timestamp = new Date().toISOString();
+  const separator = '-'.repeat(80);
+  
+  let logContent = `\n${separator}\n`;
+  logContent += `[${timestamp}] 返回响应 (${isStream ? '流式' : '非流式'})\n`;
+  logContent += `${separator}\n\n`;
+  
+  if (isStream) {
+    // 流式响应概要
+    logContent += `【流式响应概要】\n`;
+    logContent += `Message ID: ${responseData.messageId}\n`;
+    logContent += `Model: ${responseData.model}\n`;
+    logContent += `Stop Reason: ${responseData.stopReason}\n`;
+    logContent += `Tool Uses: ${responseData.toolUsesCount || 0}\n`;
+    logContent += `Input Tokens: ${responseData.inputTokens || 0}\n`;
+    logContent += `Output Tokens: ${responseData.outputTokens || 0}\n`;
+    
+    if (responseData.textContent) {
+      logContent += `\n【文本内容】\n`;
+      logContent += `${responseData.textContent}\n`;
+    }
+    
+    if (responseData.toolUses && responseData.toolUses.length > 0) {
+      logContent += `\n【工具调用】\n`;
+      responseData.toolUses.forEach((tool, index) => {
+        logContent += `  [${index}] ${tool.name} (${tool.id})\n`;
+        const inputStr = JSON.stringify(tool.input);
+        logContent += `      Input: ${inputStr.substring(0, 300)}${inputStr.length > 300 ? '...(截断)' : ''}\n`;
+      });
+    }
+  } else {
+    // 非流式响应
+    logContent += `【响应概要】\n`;
+    logContent += `ID: ${responseData.id}\n`;
+    logContent += `Model: ${responseData.model}\n`;
+    logContent += `Stop Reason: ${responseData.stop_reason}\n`;
+    logContent += `Input Tokens: ${responseData.usage?.input_tokens || 0}\n`;
+    logContent += `Output Tokens: ${responseData.usage?.output_tokens || 0}\n`;
+    
+    if (responseData.content && responseData.content.length > 0) {
+      logContent += `\n【内容块】 (${responseData.content.length} 个)\n`;
+      responseData.content.forEach((block, index) => {
+        logContent += `  [${index}] Type: ${block.type}\n`;
+        if (block.type === 'text') {
+          logContent += `      Text: ${block.text || ''}\n`;
+        } else if (block.type === 'tool_use') {
+          logContent += `      Tool: ${block.name} (${block.id})\n`;
+          const inputStr = JSON.stringify(block.input);
+          logContent += `      Input: ${inputStr.substring(0, 300)}${inputStr.length > 300 ? '...(截断)' : ''}\n`;
+        }
+      });
+    }
+  }
+  
+  logContent += `\n${separator}\n`;
+  
+  claudeCodeLogger.write(logContent);
+}
+
+/**
+ * 记录发送给 Kiro API 的请求
+ */
+function logKiroRequest(conversationState) {
+  const timestamp = new Date().toISOString();
+  const separator = '='.repeat(80);
+  
+  let logContent = `\n${separator}\n`;
+  logContent += `[${timestamp}] Kiro API 请求\n`;
+  logContent += `${separator}\n\n`;
+  
+  logContent += `【请求概要】\n`;
+  logContent += `Conversation ID: ${conversationState.conversationId}\n`;
+  logContent += `Agent Task Type: ${conversationState.agentTaskType}\n`;
+  logContent += `Chat Trigger Type: ${conversationState.chatTriggerType}\n`;
+  logContent += `History 数量: ${conversationState.history?.length || 0}\n`;
+  
+  const currentMsg = conversationState.currentMessage?.userInputMessage;
+  if (currentMsg) {
+    logContent += `\n【当前消息】\n`;
+    logContent += `Model ID: ${currentMsg.modelId}\n`;
+    logContent += `Origin: ${currentMsg.origin}\n`;
+    logContent += `Content: ${currentMsg.content}\n`;
+    
+    if (currentMsg.images && currentMsg.images.length > 0) {
+      logContent += `Images: ${currentMsg.images.length} 张\n`;
+    }
+    
+    const ctx = currentMsg.userInputMessageContext;
+    if (ctx) {
+      if (ctx.tools && ctx.tools.length > 0) {
+        logContent += `Tools: ${ctx.tools.length} 个\n`;
+      }
+      if (ctx.toolResults && ctx.toolResults.length > 0) {
+        logContent += `Tool Results: ${ctx.toolResults.length} 个\n`;
+        ctx.toolResults.forEach((tr, i) => {
+          logContent += `  [${i}] ${tr.toolUseId} - ${tr.status}\n`;
+        });
+      }
+    }
+  }
+  
+  logContent += `\n${separator}\n`;
+  
+  kiroApiLogger.write(logContent);
+}
+
+/**
+ * 记录 Kiro API 的响应
+ */
+function logKiroResponse(result, isStream = false) {
+  const timestamp = new Date().toISOString();
+  const separator = '-'.repeat(80);
+  
+  let logContent = `\n${separator}\n`;
+  logContent += `[${timestamp}] Kiro API 响应 (${isStream ? '流式' : '非流式'})\n`;
+  logContent += `${separator}\n\n`;
+  
+  logContent += `【响应概要】\n`;
+  logContent += `Input Tokens: ${result.usage?.input_tokens || 0}\n`;
+  logContent += `Output Tokens: ${result.usage?.output_tokens || 0}\n`;
+  
+  if (result.contextUsage) {
+    logContent += `Context Usage: ${result.contextUsage.contextUsagePercentage}%\n`;
+  }
+  
+  if (result.parsedContent) {
+    if (result.parsedContent.text) {
+      logContent += `\n【文本内容】\n`;
+      logContent += `${result.parsedContent.text}\n`;
+    }
+    
+    if (result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0) {
+      logContent += `\n【工具调用】 (${result.parsedContent.toolUses.length} 个)\n`;
+      result.parsedContent.toolUses.forEach((tool, index) => {
+        logContent += `  [${index}] ${tool.name} (${tool.id})\n`;
+        logContent += `      Input: ${JSON.stringify(tool.input)}\n`;
+      });
+    }
+  } else if (result.content) {
+    logContent += `\n【原始内容】\n`;
+    logContent += `${result.content}\n`;
+  }
+  
+  logContent += `\n${separator}\n`;
+  
+  kiroApiLogger.write(logContent);
 }
 
 /**
@@ -764,10 +994,14 @@ app.post('/v1/messages', async (req, res) => {
       },
       history
     };
-    fs.writeFileSync(path.join(LOGS_DIR, 'conversationState-debug.json'), JSON.stringify(conversationState, null, 2), 'utf8');
+    fsPromises.writeFile(path.join(LOGS_DIR, 'conversationState-debug.json'), JSON.stringify(conversationState, null, 2), 'utf8')
+      .catch(err => console.error('写入 conversationState-debug.json 失败:', err.message));
 
     // 非流式响应
     if (!stream) {
+      // 记录 Kiro API 请求
+      logKiroRequest(conversationState);
+      
       const result = await kiroClient.chat(userMessage, {
         modelId: kiroModelId,
         conversationId,
@@ -776,6 +1010,9 @@ app.post('/v1/messages', async (req, res) => {
         toolResults: toolResults.length > 0 ? toolResults : undefined,
         images: images.length > 0 ? images : undefined
       });
+      
+      // 记录 Kiro API 响应
+      logKiroResponse(result, false);
 
       log(`[响应] content 长度: ${result.content ? result.content.length : 0}`);
 
@@ -790,7 +1027,7 @@ app.post('/v1/messages', async (req, res) => {
         contentBlocks.push({ type: 'text', text: result.content });
       }
 
-      return res.json({
+      const response = {
         id: `msg_${uuidv4().replace(/-/g, '')}`,
         type: 'message',
         role: 'assistant',
@@ -802,7 +1039,12 @@ app.post('/v1/messages', async (req, res) => {
           input_tokens: result.usage?.input_tokens || 0,
           output_tokens: result.usage?.output_tokens || 0
         }
-      });
+      };
+      
+      // 记录响应日志
+      logResponse(response, false);
+      
+      return res.json(response);
     }
 
     // 流式响应
@@ -813,18 +1055,21 @@ app.post('/v1/messages', async (req, res) => {
 
     // 延迟发送开始事件，等收到第一个实际内容后再发
     let streamStarted = false;
-    let currentToolIndex = 0;
-    let toolIndexMap = {};
+    let textBlockStarted = false;  // 文本块是否已开始
     let textBlockEnded = false;
-    let hasTextContent = false;  // 跟踪是否有文本内容
+    let currentToolIndex = -1;  // 从 -1 开始，这样第一个工具是 0（如果没有文本块）
+    let toolIndexMap = {};
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
+    
+    // 用于收集响应内容以记录日志
+    let collectedTextContent = '';
+    let collectedToolUses = [];
 
-    // 发送流开始事件的辅助函数
+    // 发送流开始事件（只发送 message_start，不创建文本块）
     const ensureStreamStarted = () => {
       if (!streamStarted) {
         streamStarted = true;
-        // 在第一次写入时才设置流式响应的 headers
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
@@ -833,12 +1078,23 @@ app.post('/v1/messages', async (req, res) => {
           type: 'message_start',
           message: { id: messageId, type: 'message', role: 'assistant', content: [], model: model, usage: { input_tokens: 0, output_tokens: 0 } }
         })}\n\n`);
-
+      }
+    };
+    
+    // 确保文本块已开始（只在有实际文本内容时调用）
+    const ensureTextBlockStarted = () => {
+      ensureStreamStarted();
+      if (!textBlockStarted) {
+        textBlockStarted = true;
+        currentToolIndex = 0;  // 文本块占用 index 0
         res.write(`event: content_block_start\ndata: ${JSON.stringify({
           type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' }
         })}\n\n`);
       }
     };
+
+    // 记录 Kiro API 请求
+    logKiroRequest(conversationState);
 
     const result = await kiroClient.chat(userMessage, {
       modelId: kiroModelId,
@@ -849,9 +1105,11 @@ app.post('/v1/messages', async (req, res) => {
       images: images.length > 0 ? images : undefined,
       onChunk: (chunk) => {
         if (chunk.type === 'content') {
-          // 收到第一个内容时才发送开始事件
-          ensureStreamStarted();
-          hasTextContent = true;  // 标记有文本内容
+          // 有文本内容时才创建文本块
+          ensureTextBlockStarted();
+          
+          // 收集文本内容用于日志
+          collectedTextContent += chunk.data;
           
           // 将大块内容拆分成小块，模拟流式打字效果
           const text = chunk.data;
@@ -863,23 +1121,23 @@ app.post('/v1/messages', async (req, res) => {
             })}\n\n`);
           }
         } else if (chunk.type === 'tool_use_start') {
-          // 工具调用开始时也要确保流已启动
           ensureStreamStarted();
-          // 如果开始工具调用但还没有文本内容，注入占位文本
-          if (!hasTextContent && !textBlockEnded) {
-            const placeholderText = '​';  // 零宽空格，不可见但有内容
-            res.write(`event: content_block_delta\ndata: ${JSON.stringify({
-              type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: placeholderText }
-            })}\n\n`);
-            hasTextContent = true;
-          }
-          if (!textBlockEnded) {
+          // 如果有文本块且未结束，先结束它
+          if (textBlockStarted && !textBlockEnded) {
             res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
             textBlockEnded = true;
           }
           
           currentToolIndex++;
           toolIndexMap[chunk.toolUseId] = currentToolIndex;
+          
+          // 收集工具调用信息用于日志
+          collectedToolUses.push({
+            id: chunk.toolUseId,
+            name: chunk.name,
+            input: {},
+            inputJson: ''
+          });
           
           log(`[流式响应] 工具调用开始: ${chunk.name} (${chunk.toolUseId}) index=${currentToolIndex}`);
           
@@ -891,6 +1149,12 @@ app.post('/v1/messages', async (req, res) => {
         } else if (chunk.type === 'tool_use_delta') {
           const toolIndex = toolIndexMap[chunk.toolUseId];
           if (toolIndex !== undefined && chunk.inputDelta) {
+            // 收集工具输入用于日志
+            const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
+            if (tool) {
+              tool.inputJson += chunk.inputDelta;
+            }
+            
             res.write(`event: content_block_delta\ndata: ${JSON.stringify({
               type: 'content_block_delta',
               index: toolIndex,
@@ -900,6 +1164,16 @@ app.post('/v1/messages', async (req, res) => {
         } else if (chunk.type === 'tool_use_stop') {
           const toolIndex = toolIndexMap[chunk.toolUseId];
           if (toolIndex !== undefined) {
+            // 解析工具输入 JSON
+            const tool = collectedToolUses.find(t => t.id === chunk.toolUseId);
+            if (tool && tool.inputJson) {
+              try {
+                tool.input = JSON.parse(tool.inputJson);
+              } catch (e) {
+                tool.input = { _raw: tool.inputJson };
+              }
+            }
+            
             log(`[流式响应] 工具调用结束: ${chunk.name} index=${toolIndex}`);
             res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: toolIndex })}\n\n`);
           }
@@ -909,13 +1183,17 @@ app.post('/v1/messages', async (req, res) => {
 
     totalInputTokens = result.usage?.input_tokens || 0;
     totalOutputTokens = result.usage?.output_tokens || 0;
+    
+    // 记录 Kiro API 响应
+    logKiroResponse(result, true);
 
     const hasToolUses = result.parsedContent && result.parsedContent.toolUses && result.parsedContent.toolUses.length > 0;
     
     // 如果流还没开始（没有任何内容），现在发送开始事件
     ensureStreamStarted();
     
-    if (!textBlockEnded) {
+    // 如果有文本块且未结束，结束它
+    if (textBlockStarted && !textBlockEnded) {
       res.write(`event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`);
     }
     
@@ -936,6 +1214,19 @@ app.post('/v1/messages', async (req, res) => {
     }
     
     res.write(`event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`);
+    
+    // 记录流式响应日志
+    logResponse({
+      messageId,
+      model,
+      stopReason: hasToolUses ? 'tool_use' : 'end_turn',
+      textContent: collectedTextContent,
+      toolUses: collectedToolUses,
+      toolUsesCount: collectedToolUses.length,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens
+    }, true);
+    
     res.end();
 
   } catch (error) {
@@ -982,7 +1273,7 @@ const server = app.listen(PORT, HOST, () => {
 });
 
 // 优雅关闭处理
-function gracefulShutdown(signal) {
+async function gracefulShutdown(signal) {
   log(`\n📴 收到 ${signal} 信号，正在优雅关闭...`);
   
   // 清理 Token 刷新定时器
@@ -998,14 +1289,24 @@ function gracefulShutdown(signal) {
   }
   
   // 关闭 HTTP 服务器
-  server.close(() => {
+  server.close(async () => {
     log('✅ HTTP 服务器已关闭');
+    
+    // 关闭日志流，确保数据刷盘
+    await Promise.all([
+      mainLogger.close(),
+      errorLogger.close(),
+      claudeCodeLogger.close(),
+      kiroApiLogger.close()
+    ]);
+    console.log('✅ 日志流已关闭');
+    
     process.exit(0);
   });
   
   // 强制退出超时
   setTimeout(() => {
-    log('⚠️ 强制退出');
+    console.warn('⚠️ 强制退出');
     process.exit(1);
   }, 5000);
 }
