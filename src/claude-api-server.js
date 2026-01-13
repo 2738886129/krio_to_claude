@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
+const { exec } = require('child_process');
 const webAdminRouter = require('./web-admin');
 
 const app = express();
@@ -226,6 +227,107 @@ try {
   log(`   账号配置: 多账号模式=${serverConfig.account.multiAccountEnabled ? '启用' : '禁用'}, 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
 } catch (error) {
   log('⚠️ 无法加载服务器配置，使用默认值');
+}
+
+/**
+ * 检查配置文件是否有效
+ * @returns {{valid: boolean, errors: string[]}} 检查结果
+ */
+function validateConfig() {
+  const errors = [];
+  const configDir = path.join(__dirname, '..', 'config');
+
+  // 检查服务器配置
+  const serverConfigPath = path.join(configDir, 'server-config.json');
+  if (!fs.existsSync(serverConfigPath)) {
+    errors.push(`服务器配置文件不存在: config/server-config.json`);
+  }
+
+  // 根据模式检查对应的认证配置
+  if (serverConfig.account.multiAccountEnabled) {
+    // 多账号模式：检查 kiro-accounts.json
+    const accountsPath = path.join(configDir, 'kiro-accounts.json');
+    if (!fs.existsSync(accountsPath)) {
+      errors.push(`多账号配置文件不存在: config/kiro-accounts.json`);
+      errors.push(`提示: 多账号模式已启用，请创建 kiro-accounts.json 配置文件`);
+    } else {
+      try {
+        const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
+        if (!accountsData.accounts || accountsData.accounts.length === 0) {
+          errors.push(`多账号配置文件中没有账号: config/kiro-accounts.json`);
+        } else {
+          // 检查是否有至少一个可用账号
+          const activeAccounts = accountsData.accounts.filter(acc => acc.status === 'active');
+          if (activeAccounts.length === 0) {
+            errors.push(`没有可用的账号（status 为 active）`);
+          } else {
+            // 检查账号是否有有效的凭证
+            const validAccounts = activeAccounts.filter(acc =>
+              acc.credentials &&
+              acc.credentials.accessToken &&
+              acc.credentials.accessToken !== 'YOUR_ACCESS_TOKEN_HERE'
+            );
+            if (validAccounts.length === 0) {
+              errors.push(`没有配置有效 accessToken 的账号`);
+            }
+          }
+        }
+      } catch (e) {
+        errors.push(`多账号配置文件格式错误: ${e.message}`);
+      }
+    }
+  } else {
+    // 单账号模式：检查 kiro-auth-token.json
+    const tokenPath = path.join(configDir, 'kiro-auth-token.json');
+    if (!fs.existsSync(tokenPath)) {
+      errors.push(`认证配置文件不存在: config/kiro-auth-token.json`);
+      errors.push(`提示: 请复制 config/kiro-auth-token.example.json 为 config/kiro-auth-token.json 并填入您的凭证`);
+    } else {
+      try {
+        const tokenData = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
+        if (!tokenData.accessToken || tokenData.accessToken === 'YOUR_ACCESS_TOKEN_HERE') {
+          errors.push(`请在 config/kiro-auth-token.json 中填入真实的 accessToken`);
+        }
+        if (!tokenData.refreshToken || tokenData.refreshToken === 'YOUR_REFRESH_TOKEN_HERE') {
+          errors.push(`请在 config/kiro-auth-token.json 中填入真实的 refreshToken`);
+        }
+      } catch (e) {
+        errors.push(`认证配置文件格式错误: ${e.message}`);
+      }
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors
+  };
+}
+
+/**
+ * 打开浏览器访问管理页面
+ * @param {string} url - 要打开的 URL
+ */
+function openBrowser(url) {
+  const platform = process.platform;
+  let command;
+
+  switch (platform) {
+    case 'win32':
+      command = `start "" "${url}"`;
+      break;
+    case 'darwin':
+      command = `open "${url}"`;
+      break;
+    default:
+      command = `xdg-open "${url}"`;
+  }
+
+  exec(command, (error) => {
+    if (error) {
+      log(`⚠️ 无法自动打开浏览器: ${error.message}`);
+      log(`   请手动访问: ${url}`);
+    }
+  });
 }
 
 // 加载模型映射配置
@@ -1493,14 +1595,31 @@ app.get('/v1/models', async (req, res) => {
   }
 });
 
+// 启动前检查配置
+log('\n🔍 检查配置文件...');
+const configValidation = validateConfig();
+if (!configValidation.valid) {
+  console.error('\n❌ 配置检查失败:');
+  configValidation.errors.forEach(err => console.error(`   • ${err}`));
+  console.error('\n请修复以上问题后重新启动服务器。\n');
+  process.exit(1);
+}
+log('✅ 配置文件检查通过\n');
+
 const PORT = serverConfig.server.port;
 const HOST = serverConfig.server.host;
 const server = app.listen(PORT, HOST, () => {
   const displayHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
+  const webUrl = `http://${displayHost}:${PORT}`;
+
   log(`🚀 Claude API 兼容服务器运行在 http://${HOST}:${PORT}`);
   log(`📝 API 端点: POST http://${displayHost}:${PORT}/v1/messages`);
   log(`📋 模型列表: GET http://${displayHost}:${PORT}/v1/models`);
-  log(`🎨 Web 管理界面: http://${displayHost}:${PORT}`);
+  log(`🎨 Web 管理界面: ${webUrl}`);
+
+  // 自动打开浏览器
+  log('\n🌐 正在打开浏览器...');
+  openBrowser(webUrl);
 });
 
 // 优雅关闭处理
