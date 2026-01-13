@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kiro API 管理面板</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      margin-bottom: 20px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .header h1 {
+      color: #333;
+      font-size: 32px;
+      margin-bottom: 10px;
+    }
+
+    .header p {
+      color: #666;
+      font-size: 14px;
+    }
+
+    .status-bar {
+      display: flex;
+      gap: 15px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .status-card {
+      flex: 1;
+      min-width: 200px;
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .status-card h3 {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .status-card .value {
+      font-size: 28px;
+      font-weight: bold;
+      color: #333;
+    }
+
+    .status-card .label {
+      font-size: 12px;
+      color: #999;
+      margin-top: 5px;
+    }
+
+    .status-online {
+      color: #10b981;
+    }
+
+    .status-error {
+      color: #ef4444;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+
+    .tab {
+      background: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      color: #666;
+      transition: all 0.3s;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .tab:hover {
+      background: #f3f4f6;
+    }
+
+    .tab.active {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .content {
+      background: white;
+      border-radius: 12px;
+      padding: 30px;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+
+    th, td {
+      padding: 12px;
+      text-align: left;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    th {
+      background: #f9fafb;
+      font-weight: 600;
+      color: #374151;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      color: #6b7280;
+      font-size: 14px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .badge-active {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .badge-error {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+      transition: width 0.3s;
+    }
+
+    .progress-fill.warning {
+      background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+    }
+
+    .progress-fill.danger {
+      background: linear-gradient(90deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    .config-item {
+      margin-bottom: 20px;
+      padding: 15px;
+      background: #f9fafb;
+      border-radius: 8px;
+    }
+
+    .config-item label {
+      display: block;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .config-item .value {
+      color: #6b7280;
+      font-size: 14px;
+      font-family: 'Courier New', monospace;
+    }
+
+    .btn {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: transform 0.2s;
+    }
+
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    .log-viewer {
+      background: #1f2937;
+      color: #e5e7eb;
+      padding: 20px;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      max-height: 500px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .loading {
+      text-align: center;
+      padding: 40px;
+      color: #6b7280;
+    }
+
+    .error-message {
+      background: #fee2e2;
+      color: #991b1b;
+      padding: 15px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+    }
+
+    .account-card {
+      background: #f9fafb;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 15px;
+      border-left: 4px solid #667eea;
+    }
+
+    .account-card.error {
+      border-left-color: #ef4444;
+    }
+
+    .account-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .account-email {
+      font-weight: 600;
+      color: #374151;
+      font-size: 16px;
+    }
+
+    .account-info {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 15px;
+      margin-top: 15px;
+    }
+
+    .info-item {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .info-label {
+      font-size: 12px;
+      color: #6b7280;
+      margin-bottom: 4px;
+    }
+
+    .info-value {
+      font-size: 14px;
+      color: #374151;
+      font-weight: 500;
+    }
+
+    @media (max-width: 768px) {
+      .status-bar {
+        flex-direction: column;
+      }
+
+      .tabs {
+        flex-direction: column;
+      }
+
+      table {
+        font-size: 12px;
+      }
+
+      th, td {
+        padding: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🚀 Kiro API 管理面板</h1>
+      <p>实时监控和管理您的 Kiro API 服务器</p>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-card">
+        <h3>服务器状态</h3>
+        <div class="value" id="serverStatus">检查中...</div>
+        <div class="label">Server Status</div>
+      </div>
+      <div class="status-card">
+        <h3>活跃账号</h3>
+        <div class="value" id="activeAccounts">-</div>
+        <div class="label">Active Accounts</div>
+      </div>
+      <div class="status-card">
+        <h3>总额度</h3>
+        <div class="value" id="totalQuota">-</div>
+        <div class="label">Total Quota</div>
+      </div>
+      <div class="status-card">
+        <h3>已使用</h3>
+        <div class="value" id="usedQuota">-</div>
+        <div class="label">Used Quota</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('accounts')">账号管理</button>
+      <button class="tab" onclick="switchTab('config')">服务器配置</button>
+      <button class="tab" onclick="switchTab('models')">模型映射</button>
+      <button class="tab" onclick="switchTab('logs')">日志查看</button>
+    </div>
+
+    <div class="content">
+      <div id="accounts" class="tab-content active">
+        <h2>账号管理</h2>
+        <div id="accountsList"></div>
+      </div>
+
+      <div id="config" class="tab-content">
+        <h2>服务器配置</h2>
+        <div id="configContent"></div>
+      </div>
+
+      <div id="models" class="tab-content">
+        <h2>模型映射配置</h2>
+        <div id="modelsContent"></div>
+      </div>
+
+      <div id="logs" class="tab-content">
+        <h2>日志查看</h2>
+        <div style="margin-bottom: 15px;">
+          <select id="logSelect" onchange="loadLog()" style="padding: 8px; border-radius: 6px; border: 1px solid #d1d5db;">
+            <option value="server-debug.log">服务器调试日志</option>
+            <option value="server-error.log">服务器错误日志</option>
+            <option value="claude-code.log">Claude Code 日志</option>
+            <option value="kiro-api.log">Kiro API 日志</option>
+          </select>
+          <button class="btn" onclick="loadLog()" style="margin-left: 10px;">刷新</button>
+        </div>
+        <div class="log-viewer" id="logContent">加载中...</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

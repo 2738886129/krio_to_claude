@@ -6,9 +6,16 @@ const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
+const webAdminRouter = require('./web-admin');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
+
+// 静态文件服务 - Web管理界面
+app.use(express.static(path.join(__dirname, '..', 'public')));
+
+// Web管理API路由
+app.use(webAdminRouter);
 
 // 日志文件路径
 const LOGS_DIR = path.join(__dirname, '..', 'logs');
@@ -1489,9 +1496,11 @@ app.get('/v1/models', async (req, res) => {
 const PORT = serverConfig.server.port;
 const HOST = serverConfig.server.host;
 const server = app.listen(PORT, HOST, () => {
+  const displayHost = HOST === '0.0.0.0' ? 'localhost' : HOST;
   log(`🚀 Claude API 兼容服务器运行在 http://${HOST}:${PORT}`);
-  log(`📝 API 端点: POST http://${HOST}:${PORT}/v1/messages`);
-  log(`📋 模型列表: GET http://${HOST}:${PORT}/v1/models`);
+  log(`📝 API 端点: POST http://${displayHost}:${PORT}/v1/messages`);
+  log(`📋 模型列表: GET http://${displayHost}:${PORT}/v1/models`);
+  log(`🎨 Web 管理界面: http://${displayHost}:${PORT}`);
 });
 
 // 优雅关闭处理
