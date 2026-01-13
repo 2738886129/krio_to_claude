@@ -8,6 +8,7 @@ const fsPromises = require('fs').promises;
 const path = require('path');
 const { exec } = require('child_process');
 const webAdminRouter = require('./web-admin');
+const logger = require('./logger');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -18,126 +19,15 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // Web管理API路由
 app.use(webAdminRouter);
 
-// 日志文件路径
-const LOGS_DIR = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(LOGS_DIR)) {
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-}
-const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
-const ERROR_LOG_FILE = path.join(LOGS_DIR, 'server-error.log');
-const CLAUDE_CODE_LOG_FILE = path.join(LOGS_DIR, 'claude-code.log');
-const KIRO_API_LOG_FILE = path.join(LOGS_DIR, 'kiro-api.log');
+// 日志目录（用于保存原始请求 JSON）
+const LOGS_DIR = logger.LOGS_DIR;
 
-// 基于 WriteStream 的日志类（内置背压控制）
-class StreamLogger {
-  constructor(filePath) {
-    this.filePath = filePath;
-    this.stream = null;
-    this.draining = false;
-    this.dropCount = 0;  // 统计丢弃的消息数
-  }
-
-  // 初始化文件并创建写入流
-  initSync(content) {
-    // 先同步写入初始内容
-    fs.writeFileSync(this.filePath, content, 'utf8');
-    
-    // 创建追加模式的写入流
-    this.stream = fs.createWriteStream(this.filePath, {
-      flags: 'a',              // 追加模式
-      highWaterMark: 64 * 1024 // 64KB 缓冲区
-    });
-
-    // 背压恢复事件
-    this.stream.on('drain', () => {
-      this.draining = false;
-      if (this.dropCount > 0) {
-        console.warn(`[日志] 背压恢复，期间丢弃了 ${this.dropCount} 条消息`);
-        this.dropCount = 0;
-      }
-    });
-
-    // 错误处理
-    this.stream.on('error', (err) => {
-      console.error(`[日志] 写入流错误 (${this.filePath}):`, err.message);
-    });
-  }
-
-  write(message) {
-    if (!this.stream) {
-      console.error('[日志] 写入流未初始化');
-      return;
-    }
-
-    // 背压控制：缓冲区满时丢弃消息
-    if (this.draining) {
-      this.dropCount++;
-      return;
-    }
-
-    const ok = this.stream.write(message);
-    if (!ok) {
-      this.draining = true;
-    }
-  }
-
-  // 优雅关闭，确保数据刷盘
-  close() {
-    return new Promise((resolve) => {
-      if (this.stream) {
-        this.stream.end(() => {
-          resolve();
-        });
-      } else {
-        resolve();
-      }
-    });
-  }
-}
-
-// 创建日志实例
-const mainLogger = new StreamLogger(LOG_FILE);
-const errorLogger = new StreamLogger(ERROR_LOG_FILE);
-const claudeCodeLogger = new StreamLogger(CLAUDE_CODE_LOG_FILE);
-const kiroApiLogger = new StreamLogger(KIRO_API_LOG_FILE);
-
-// 日志函数
-function log(message) {
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${message}\n`;
-  console.log(message);
-  mainLogger.write(logMessage);
-}
-
-function logObject(label, obj) {
-  const message = `${label}:\n${JSON.stringify(obj, null, 2)}`;
-  log(message);
-}
-
-function logError(message, error = null) {
-  const timestamp = new Date().toISOString();
-  let errorMessage = `[${timestamp}] ❌ ${message}\n`;
-  if (error) {
-    errorMessage += `错误详情: ${error.message}\n`;
-    if (error.stack) {
-      errorMessage += `堆栈跟踪:\n${error.stack}\n`;
-    }
-  }
-  errorMessage += '\n';
-  console.error(message);
-  if (error) console.error('错误详情:', error.message);
-  errorLogger.write(errorMessage);
-  mainLogger.write(errorMessage);
-}
-
-// 初始化日志文件（同步，仅启动时）
-mainLogger.initSync(`=== 服务器启动于 ${new Date().toISOString()} ===\n\n`);
-errorLogger.initSync(`=== 错误日志启动于 ${new Date().toISOString()} ===\n\n`);
-claudeCodeLogger.initSync(`=== Claude Code 请求/响应日志启动于 ${new Date().toISOString()} ===\n\n`);
-kiroApiLogger.initSync(`=== Kiro API 请求/响应日志启动于 ${new Date().toISOString()} ===\n\n`);
-log('日志文件已初始化: ' + LOG_FILE);
-log('Claude Code 日志文件: ' + CLAUDE_CODE_LOG_FILE);
-log('Kiro API 日志文件: ' + KIRO_API_LOG_FILE);
+// 初始化日志系统
+logger.initAll();
+const { log, logObject, logError, loggers } = logger;
+log('日志文件已初始化: ' + logger.LOG_FILES.main);
+log('Claude Code 日志文件: ' + logger.LOG_FILES.claudeCode);
+log('Kiro API 日志文件: ' + logger.LOG_FILES.kiroApi);
 
 /**
  * Claude API 错误类型映射
@@ -814,12 +704,12 @@ function logRawRequest(req) {
   
   logContent += `\n${separator}\n`;
   
-  claudeCodeLogger.write(logContent);
-  
+  loggers.claudeCode.write(logContent);
+
   // 保存完整的原始请求体到单独的 JSON 文件（异步写入）
   const fullRequestFile = path.join(LOGS_DIR, 'last-raw-request.json');
   fsPromises.writeFile(fullRequestFile, JSON.stringify(body, null, 2), 'utf8')
-    .catch(err => console.error('写入 last-raw-request.json 失败:', err.message));
+    .catch(err => logError('写入 last-raw-request.json 失败', err));
 }
 
 /**
@@ -881,8 +771,8 @@ function logResponse(responseData, isStream = false) {
   }
   
   logContent += `\n${separator}\n`;
-  
-  claudeCodeLogger.write(logContent);
+
+  loggers.claudeCode.write(logContent);
 }
 
 /**
@@ -928,8 +818,8 @@ function logKiroRequest(conversationState) {
   }
   
   logContent += `\n${separator}\n`;
-  
-  kiroApiLogger.write(logContent);
+
+  loggers.kiroApi.write(logContent);
 }
 
 /**
@@ -970,8 +860,8 @@ function logKiroResponse(result, isStream = false) {
   }
   
   logContent += `\n${separator}\n`;
-  
-  kiroApiLogger.write(logContent);
+
+  loggers.kiroApi.write(logContent);
 }
 
 /**
@@ -1195,7 +1085,7 @@ app.post('/v1/messages', async (req, res) => {
       history
     };
     fsPromises.writeFile(path.join(LOGS_DIR, 'conversationState-debug.json'), JSON.stringify(conversationState, null, 2), 'utf8')
-      .catch(err => console.error('写入 conversationState-debug.json 失败:', err.message));
+      .catch(err => logError('写入 conversationState-debug.json 失败', err));
 
     // 非流式响应
     if (!stream) {
@@ -1599,9 +1489,7 @@ app.get('/v1/models', async (req, res) => {
 log('\n🔍 检查配置文件...');
 const configValidation = validateConfig();
 if (!configValidation.valid) {
-  console.error('\n❌ 配置检查失败:');
-  configValidation.errors.forEach(err => console.error(`   • ${err}`));
-  console.error('\n请修复以上问题后重新启动服务器。\n');
+  logError('配置检查失败:\n' + configValidation.errors.map(err => `   • ${err}`).join('\n') + '\n\n请修复以上问题后重新启动服务器。');
   process.exit(1);
 }
 log('✅ 配置文件检查通过\n');
@@ -1641,20 +1529,16 @@ async function gracefulShutdown(signal) {
   // 关闭 HTTP 服务器
   server.close(async () => {
     log('✅ HTTP 服务器已关闭');
-    
+
     // 关闭日志流，确保数据刷盘
-    await Promise.all([
-      mainLogger.close(),
-      errorLogger.close(),
-      claudeCodeLogger.close(),
-      kiroApiLogger.close()
-    ]);
+    await logger.closeAll();
+    // 注意：日志流已关闭，只能用 console 输出
     console.log('✅ 日志流已关闭');
-    
+
     process.exit(0);
   });
-  
-  // 强制退出超时
+
+  // 强制退出超时（日志流可能已关闭，使用 console）
   setTimeout(() => {
     console.warn('⚠️ 强制退出');
     process.exit(1);

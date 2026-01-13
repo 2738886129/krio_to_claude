@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { refreshSocialToken } = require('./loadToken');
+const { log, logWarn, logError } = require('./logger');
 
 const ACCOUNTS_PATH = path.join(__dirname, '..', 'config', 'kiro-accounts.json');
 
@@ -103,7 +104,7 @@ async function refreshAccountToken(accountId) {
     throw new Error(`账号 ${account.email} 没有 refreshToken，无法刷新`);
   }
   
-  console.log(`🔄 正在刷新账号 ${account.email} 的 Token...`);
+  log(`🔄 正在刷新账号 ${account.email} 的 Token...`);
   
   try {
     const result = await refreshSocialToken(account.credentials.refreshToken);
@@ -121,7 +122,7 @@ async function refreshAccountToken(accountId) {
     // 保存到文件
     saveAccountsConfig(config);
     
-    console.log(`✅ 账号 ${account.email} Token 刷新成功`);
+    log(`✅ 账号 ${account.email} Token 刷新成功`);
     
     return config.accounts[accountIndex];
   } catch (error) {
@@ -213,7 +214,7 @@ async function getBestAccountToken(options = {}) {
     throw new Error('没有可用的账号');
   }
   
-  console.log(`📌 选择账号: ${account.email} (使用率: ${(account.usage?.percentUsed * 100 || 0).toFixed(1)}%)`);
+  log(`📌 选择账号: ${account.email} (使用率: ${(account.usage?.percentUsed * 100 || 0).toFixed(1)}%)`);
   
   const token = await getAccountToken(account.id, { bufferSeconds });
   
@@ -261,7 +262,7 @@ function markAccountError(accountId, errorMessage) {
   
   saveAccountsConfig(config);
   
-  console.warn(`⚠️ 账号 ${config.accounts[accountIndex].email} 标记为错误: ${errorMessage}`);
+  logWarn(`账号 ${config.accounts[accountIndex].email} 标记为错误: ${errorMessage}`);
 }
 
 /**
@@ -310,35 +311,35 @@ function shouldSwitchAccount(error) {
  * @returns {Promise<{token: string, account: object}|null>} 新账号信息或 null
  */
 async function switchToNextAccount(currentAccountId, strategy = 'auto') {
-  console.log(`🔄 尝试切换账号...`);
-  
+  log('🔄 尝试切换账号...');
+
   // 先标记当前账号为错误状态
   markAccountError(currentAccountId, '额度不足或账号异常，已自动切换');
-  
+
   // 获取其他可用账号
   const availableAccounts = getAvailableAccounts();
-  
+
   if (availableAccounts.length === 0) {
-    console.error('❌ 没有其他可用账号');
+    logError('没有其他可用账号');
     return null;
   }
-  
+
   // 选择新账号
   const newAccount = selectBestAccount(strategy);
-  
+
   if (!newAccount) {
-    console.error('❌ 无法选择新账号');
+    logError('无法选择新账号');
     return null;
   }
-  
-  console.log(`✅ 切换到新账号: ${newAccount.email} (使用率: ${(newAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%)`);
-  
+
+  log(`✅ 切换到新账号: ${newAccount.email} (使用率: ${(newAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%)`);
+
   // 获取新账号的 Token
   try {
     const token = await getAccountToken(newAccount.id);
     return { token, account: newAccount };
   } catch (error) {
-    console.error(`❌ 获取新账号 Token 失败: ${error.message}`);
+    logError(`获取新账号 Token 失败: ${error.message}`);
     return null;
   }
 }

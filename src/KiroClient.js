@@ -2,59 +2,7 @@ const axios = require('axios');
 const https = require('https');
 const { v4: uuidv4 } = require('uuid');
 const util = require('util');
-const fs = require('fs');
-const fsPromises = require('fs').promises;
-const path = require('path');
-
-// 日志文件路径
-const LOGS_DIR = path.join(__dirname, '..', 'logs');
-if (!fs.existsSync(LOGS_DIR)) {
-  fs.mkdirSync(LOGS_DIR, { recursive: true });
-}
-const KIRO_LOG_FILE = path.join(LOGS_DIR, 'kiro-client-debug.log');
-
-// 异步日志队列
-let logQueue = [];
-let isWriting = false;
-
-async function flushLogQueue() {
-  if (isWriting || logQueue.length === 0) return;
-  isWriting = true;
-  
-  const batch = logQueue.splice(0, 100);
-  try {
-    await fsPromises.appendFile(KIRO_LOG_FILE, batch.join(''));
-  } catch (err) {
-    console.error('KiroClient 日志写入失败:', err.message);
-  }
-  
-  isWriting = false;
-  if (logQueue.length > 0) {
-    setImmediate(flushLogQueue);
-  }
-}
-
-// 初始化日志文件（同步，仅启动时）
-fs.writeFileSync(KIRO_LOG_FILE, `=== Kiro Client 日志启动于 ${new Date().toISOString()} ===\n\n`, 'utf8');
-
-// 日志函数 - 异步写入文件
-function logToFile(message, consoleMessage = null) {
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${message}\n`;
-  
-  // 异步写入文件
-  logQueue.push(logMessage);
-  setImmediate(flushLogQueue);
-  
-  // 输出到控制台（简略信息）
-  if (consoleMessage !== null) {
-    console.log(consoleMessage);
-  } else {
-    // 如果没有提供简略信息，输出简化版本
-    const shortMessage = message.length > 100 ? message.substring(0, 100) + '...' : message;
-    console.log(`[Kiro] ${shortMessage}`);
-  }
-}
+const { logKiroClient: logToFile, logKiroClientError, logKiroClientDebug } = require('./logger');
 
 /**
  * Kiro AI API 客户端
@@ -112,7 +60,7 @@ class KiroClient {
             });
             
             const fullData = Buffer.concat(chunks).toString('utf8');
-            console.error('[400 错误原始响应]', fullData);
+            logKiroClientError('400 错误原始响应', fullData);
             error.response.data = fullData;
           }
         }
@@ -226,7 +174,7 @@ class KiroClient {
             errorBody += chunk.toString('utf8');
           });
           response.data.on('end', () => {
-            console.error(`[Kiro API Error ${response.status}]`, errorBody);
+            logKiroClientError(`Kiro API Error ${response.status}`, errorBody);
             reject(new Error(`API Error ${response.status}: ${errorBody || '未知错误'}`));
           });
           response.data.on('error', (err) => {
@@ -533,8 +481,8 @@ class KiroClient {
         }
         
         // 记录详细错误到日志
-        console.error(`[Kiro API Error ${error.response.status}]`, errorBody);
-        
+        logKiroClientError(`Kiro API Error ${error.response.status}`, errorBody);
+
         throw new Error(`API Error ${error.response.status} ${error.response.statusText || ''}: ${errorBody || '未知错误'}`);
       }
       
@@ -597,7 +545,7 @@ class KiroClient {
 
     // 调试：打印请求体（可选）
     if (options.debug) {
-      console.log('[DEBUG] 请求体:', JSON.stringify(conversationState, null, 2));
+      logKiroClientDebug('请求体', conversationState);
     }
 
     // 调用 API

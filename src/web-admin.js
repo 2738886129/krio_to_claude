@@ -3,25 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const { refreshAccountToken, markAccountError } = require('./loadMultiAccount');
 const KiroClient = require('./KiroClient');
+const { log, LOGS_DIR, LOG_LEVELS, setLogLevel, getLogLevel, setRotationConfig, getStatus, rotateAll } = require('./logger');
 
 const router = express.Router();
 
 // 配置文件路径
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
-const LOGS_DIR = path.join(__dirname, '..', 'logs');
-const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
-
-// 日志函数（追加到主日志文件）
-function log(message) {
-  const timestamp = new Date().toISOString();
-  const logMessage = `[${timestamp}] ${message}\n`;
-  console.log(message);
-  try {
-    fs.appendFileSync(LOG_FILE, logMessage);
-  } catch (e) {
-    // 忽略日志写入错误
-  }
-}
 
 // 获取账号列表
 router.get('/api/accounts', (req, res) => {
@@ -132,6 +119,90 @@ router.get('/api/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString()
   });
+});
+
+// ==================== 日志管理 API ====================
+
+// 获取日志系统状态
+router.get('/api/logger/status', (req, res) => {
+  try {
+    const status = getStatus();
+    status.availableLevels = Object.keys(LOG_LEVELS);
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 设置日志级别
+router.post('/api/logger/level', (req, res) => {
+  try {
+    const { level } = req.body;
+    if (!level) {
+      return res.status(400).json({ error: '缺少 level 参数' });
+    }
+
+    const upperLevel = String(level).toUpperCase();
+    if (LOG_LEVELS[upperLevel] === undefined) {
+      return res.status(400).json({
+        error: `无效的日志级别: ${level}`,
+        validLevels: Object.keys(LOG_LEVELS)
+      });
+    }
+
+    setLogLevel(upperLevel);
+    const newLevel = getLogLevel();
+    log(`日志级别已更改为: ${newLevel.name}`);
+    res.json({ success: true, level: newLevel });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 设置日志轮转配置
+router.post('/api/logger/rotation', (req, res) => {
+  try {
+    const { maxSize, maxFiles } = req.body;
+    const config = {};
+
+    if (maxSize !== undefined) {
+      const size = parseInt(maxSize, 10);
+      if (isNaN(size) || size < 1024 * 1024) {
+        return res.status(400).json({ error: 'maxSize 至少为 1MB (1048576 字节)' });
+      }
+      config.maxSize = size;
+    }
+
+    if (maxFiles !== undefined) {
+      const files = parseInt(maxFiles, 10);
+      if (isNaN(files) || files < 1 || files > 100) {
+        return res.status(400).json({ error: 'maxFiles 必须在 1-100 之间' });
+      }
+      config.maxFiles = files;
+    }
+
+    if (Object.keys(config).length === 0) {
+      return res.status(400).json({ error: '需要提供 maxSize 或 maxFiles 参数' });
+    }
+
+    setRotationConfig(config);
+    const status = getStatus();
+    log(`日志轮转配置已更新: ${JSON.stringify(status.rotation)}`);
+    res.json({ success: true, rotation: status.rotation });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 手动触发日志轮转
+router.post('/api/logger/rotate', (req, res) => {
+  try {
+    rotateAll();
+    log('手动触发日志轮转完成');
+    res.json({ success: true, message: '日志轮转已触发' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // 重置账号（刷新 Token 并测试连接）

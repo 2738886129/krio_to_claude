@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { log, logWarn, logError } = require('./logger');
 
 const KIRO_AUTH_ENDPOINT = 'https://prod.us-east-1.auth.desktop.kiro.dev';
 const TOKEN_PATH = path.join(__dirname, '..', 'config', 'kiro-auth-token.json');
@@ -12,7 +13,7 @@ const TOKEN_PATH = path.join(__dirname, '..', 'config', 'kiro-auth-token.json');
 async function refreshSocialToken(refreshToken) {
   const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`;
   
-  console.log('🔄 正在刷新 Token...');
+  log('🔄 正在刷新 Token...');
   
   const response = await fetch(url, {
     method: 'POST',
@@ -44,7 +45,7 @@ async function refreshSocialToken(refreshToken) {
  */
 function saveTokenToFile(tokenData) {
   fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenData, null, 2), 'utf8');
-  console.log('✅ Token 已保存到文件');
+  log('✅ Token 已保存到文件');
 }
 
 /**
@@ -84,9 +85,7 @@ function loadToken() {
       const now = new Date();
       
       if (now >= expiresAt) {
-        console.warn('⚠️  警告: Token 已过期');
-        console.warn(`   过期时间: ${expiresAt.toLocaleString('zh-CN')}`);
-        console.warn(`   当前时间: ${now.toLocaleString('zh-CN')}`);
+        logWarn(`Token 已过期 (过期时间: ${expiresAt.toLocaleString('zh-CN')}, 当前时间: ${now.toLocaleString('zh-CN')})`);
       }
     }
     
@@ -134,7 +133,7 @@ async function loadTokenWithRefresh(options = {}) {
   // 检查是否需要刷新
   if (needsRefresh(tokenData, bufferSeconds)) {
     if (!tokenData.refreshToken) {
-      console.warn('⚠️  Token 已过期但没有 refreshToken，无法自动刷新');
+      logWarn('Token 已过期但没有 refreshToken，无法自动刷新');
       return tokenData.accessToken;
     }
     
@@ -157,11 +156,11 @@ async function loadTokenWithRefresh(options = {}) {
         saveTokenToFile(newTokenData);
       }
       
-      console.log(`✅ Token 刷新成功，新过期时间: ${expiresAt.toLocaleString('zh-CN')}`);
-      
+      log(`✅ Token 刷新成功，新过期时间: ${expiresAt.toLocaleString('zh-CN')}`);
+
       return result.accessToken;
     } catch (error) {
-      console.error('❌ Token 刷新失败:', error.message);
+      logError('Token 刷新失败', error);
       // 刷新失败，返回旧 token（可能已过期）
       return tokenData.accessToken;
     }
@@ -197,8 +196,8 @@ async function forceRefreshToken() {
   // 保存到文件
   saveTokenToFile(newTokenData);
   
-  console.log(`✅ Token 强制刷新成功，新过期时间: ${expiresAt.toLocaleString('zh-CN')}`);
-  
+  log(`✅ Token 强制刷新成功，新过期时间: ${expiresAt.toLocaleString('zh-CN')}`);
+
   return newTokenData;
 }
 
