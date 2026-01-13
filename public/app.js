@@ -43,6 +43,52 @@ function hashData(data) {
   return JSON.stringify(data);
 }
 
+// 显示通知
+function showNotification(message, type = 'info') {
+  // 移除已存在的通知
+  const existing = document.querySelector('.notification');
+  if (existing) existing.remove();
+
+  const notification = document.createElement('div');
+  notification.className = `notification notification-${type}`;
+  notification.textContent = message;
+  document.body.appendChild(notification);
+
+  // 3秒后自动消失
+  setTimeout(() => notification.remove(), 3000);
+}
+
+// 重置账号（尝试刷新 Token）
+async function resetAccount(accountId, event) {
+  if (event) event.stopPropagation();
+
+  const btn = event?.target;
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '重置中...';
+  }
+
+  try {
+    const response = await fetch(`/api/accounts/${accountId}/reset`, { method: 'POST' });
+    const result = await response.json();
+
+    if (result.success) {
+      showNotification('账号重置成功', 'success');
+    } else {
+      showNotification(`重置失败: ${result.error}`, 'error');
+    }
+
+    // 刷新账号列表
+    loadAccounts(true);
+  } catch (error) {
+    showNotification(`重置失败: ${error.message}`, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '重置';
+    }
+  }
+}
+
 // ============================================
 // 切换标签页
 // ============================================
@@ -328,7 +374,10 @@ function renderAccounts() {
               <div class="account-avatar">${initials}</div>
               <div class="account-name-group">
                 <div class="account-email">${account.email || '未知邮箱'}</div>
-                <div class="account-nickname">${account.nickname || account.userId?.split('.')[1]?.substring(0, 12) || '-'}</div>
+                <div class="account-meta">
+                  <span class="account-nickname">${account.nickname || account.userId?.split('.')[1]?.substring(0, 12) || '-'}</span>
+                  ${account.status === 'error' ? `<button class="btn-reset-small" onclick="resetAccount('${account.id}', event)">重置</button>` : ''}
+                </div>
               </div>
             </div>
             <div class="account-badges">

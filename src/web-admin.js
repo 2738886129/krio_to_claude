@@ -1,12 +1,27 @@
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+const { refreshAccountToken, markAccountError } = require('./loadMultiAccount');
+const KiroClient = require('./KiroClient');
 
 const router = express.Router();
 
 // 配置文件路径
 const CONFIG_DIR = path.join(__dirname, '..', 'config');
 const LOGS_DIR = path.join(__dirname, '..', 'logs');
+const LOG_FILE = path.join(LOGS_DIR, 'server-debug.log');
+
+// 日志函数（追加到主日志文件）
+function log(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  console.log(message);
+  try {
+    fs.appendFileSync(LOG_FILE, logMessage);
+  } catch (e) {
+    // 忽略日志写入错误
+  }
+}
 
 // 获取账号列表
 router.get('/api/accounts', (req, res) => {
@@ -117,6 +132,43 @@ router.get('/api/health', (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString()
   });
+});
+
+// 重置账号（刷新 Token 并测试连接）
+router.post('/api/accounts/:accountId/reset', async (req, res) => {
+  const accountId = req.params.accountId;
+  let account;
+
+  log(`🔄 开始重置账号: ${accountId}`);
+
+  try {
+    // 1. 刷新 Token
+    account = await refreshAccountToken(accountId);
+    log(`✅ Token 刷新成功: ${account.email}`);
+  } catch (error) {
+    log(`❌ Token 刷新失败: ${error.message}`);
+    return res.json({ success: false, error: `Token 刷新失败: ${error.message}` });
+  }
+
+  try {
+    // 2. 发送测试消息验证账号可用性
+    log(`🔄 开始连接测试: ${account.email}`);
+    const testClient = new KiroClient(account.credentials.accessToken, {
+      timeout: 15000
+    });
+
+    await testClient.chat('hi', {
+      modelId: 'claude-haiku-4.5'
+    });
+
+    log(`✅ 账号重置成功: ${account.email}`);
+    res.json({ success: true, account, message: '账号重置成功，连接测试通过' });
+  } catch (error) {
+    // 测试失败，标记账号为错误状态
+    log(`❌ 连接测试失败: ${account.email} - ${error.message}`);
+    markAccountError(accountId, `连接测试失败: ${error.message}`);
+    res.json({ success: false, error: `Token 刷新成功，但连接测试失败: ${error.message}` });
+  }
 });
 
 module.exports = router;
