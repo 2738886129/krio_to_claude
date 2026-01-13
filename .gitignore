@@ -8,4 +8,9 @@ logs/*
 !logs/.gitkeep
 
 # Token 文件（包含敏感信息）
-kiro-auth-token.json
+config/kiro-auth-token.json
+config/kiro-accounts.json
+
+# Claude Code 临时文件
+tmpclaude-*
+.claude/
