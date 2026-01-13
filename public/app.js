@@ -53,10 +53,11 @@ async function loadAccounts() {
       return;
     }
 
-    // 更新统计信息
-    const activeAccounts = data.accounts.filter(acc => acc.status === 'active').length;
-    const totalLimit = data.accounts.reduce((sum, acc) => sum + (acc.usage?.limit || 0), 0);
-    const totalUsed = data.accounts.reduce((sum, acc) => sum + (acc.usage?.current || 0), 0);
+    // 更新统计信息（只统计活跃账号）
+    const activeAccountsList = data.accounts.filter(acc => acc.status === 'active');
+    const activeAccounts = activeAccountsList.length;
+    const totalLimit = activeAccountsList.reduce((sum, acc) => sum + (acc.usage?.limit || 0), 0);
+    const totalUsed = activeAccountsList.reduce((sum, acc) => sum + (acc.usage?.current || 0), 0);
 
     document.getElementById('activeAccounts').textContent = activeAccounts;
     document.getElementById('totalQuota').textContent = totalLimit.toFixed(2);
