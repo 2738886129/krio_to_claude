@@ -476,6 +476,69 @@ router.post('/api/config/hot-reload/stop', (req, res) => {
   }
 });
 
+// 测试账号可用性（发送模拟请求验证账号是否可用）
+router.post('/api/accounts/:accountId/test', async (req, res) => {
+  const accountId = req.params.accountId;
+  
+  log(`🧪 开始测试账号可用性: ${accountId}`);
+  
+  try {
+    // 读取账号信息
+    const accountsFile = path.join(CONFIG_DIR, 'kiro-accounts.json');
+    if (!fs.existsSync(accountsFile)) {
+      return res.json({ success: false, error: '账号配置文件不存在' });
+    }
+    
+    const data = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+    const account = data.accounts.find(acc => acc.id === accountId);
+    
+    if (!account) {
+      return res.json({ success: false, error: '账号不存在' });
+    }
+    
+    if (!account.credentials?.accessToken) {
+      return res.json({ success: false, error: '账号缺少 accessToken' });
+    }
+    
+    // 创建测试客户端
+    const testClient = new KiroClient(account.credentials.accessToken, {
+      timeout: 20000  // 20秒超时
+    });
+    
+    const startTime = Date.now();
+    
+    // 发送简单的测试消息
+    await testClient.chat('hi', {
+      modelId: 'claude-haiku-4.5'  // 使用最快的模型
+    });
+    
+    const responseTime = Date.now() - startTime;
+    
+    log(`✅ 账号测试成功: ${account.email || accountId}, 响应时间: ${responseTime}ms`);
+    
+    res.json({ 
+      success: true, 
+      message: '账号可用',
+      responseTime,
+      account: {
+        id: account.id,
+        email: account.email
+      }
+    });
+  } catch (error) {
+    log(`❌ 账号测试失败: ${accountId} - ${error.message}`);
+    
+    // 标记账号为错误状态
+    markAccountError(accountId, `测试失败: ${error.message}`);
+    
+    res.json({ 
+      success: false, 
+      error: error.message,
+      account: { id: accountId }
+    });
+  }
+});
+
 // 重置账号（刷新 Token 并测试连接）
 router.post('/api/accounts/:accountId/reset', async (req, res) => {
   const accountId = req.params.accountId;

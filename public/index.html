@@ -651,6 +651,90 @@
       cursor: not-allowed;
     }
 
+    /* 账号操作按钮区域 */
+    .account-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px dashed #e5e7eb;
+    }
+
+    /* 测试按钮样式 */
+    .btn-test {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: white;
+      box-shadow: 0 2px 4px rgba(245, 158, 11, 0.2);
+    }
+
+    .btn-test:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
+    }
+
+    .btn-test:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-test.testing {
+      background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+      animation: pulse 1s infinite;
+    }
+
+    .btn-test.test-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .btn-test.test-failed {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    .btn-test-small {
+      padding: 4px 10px;
+      border: none;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+      color: white;
+      box-shadow: 0 2px 4px rgba(245, 158, 11, 0.2);
+    }
+
+    .btn-test-small:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 8px rgba(245, 158, 11, 0.3);
+    }
+
+    .btn-test-small:disabled {
+      opacity: 0.7;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .btn-test-small.testing {
+      background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+      animation: pulse 1s infinite;
+    }
+
+    .btn-test-small.test-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .btn-test-small.test-failed {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+
     /* 通知样式 */
     .notification {
       position: fixed;

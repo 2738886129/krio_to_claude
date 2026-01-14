@@ -89,6 +89,65 @@ async function resetAccount(accountId, event) {
   }
 }
 
+// 测试账号可用性
+async function testAccount(accountId, event) {
+  if (event) event.stopPropagation();
+
+  const btn = event?.target;
+  const originalText = btn?.textContent || '测试';
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '测试中...';
+    btn.classList.add('testing');
+  }
+
+  try {
+    const response = await fetch(`/api/accounts/${accountId}/test`, { method: 'POST' });
+    const result = await response.json();
+
+    if (result.success) {
+      showNotification(`账号可用，响应时间: ${result.responseTime}ms`, 'success');
+      if (btn) {
+        btn.textContent = '✓ 可用';
+        btn.classList.remove('testing');
+        btn.classList.add('test-success');
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove('test-success');
+          btn.disabled = false;
+        }, 2000);
+      }
+    } else {
+      showNotification(`测试失败: ${result.error}`, 'error');
+      if (btn) {
+        btn.textContent = '✗ 失败';
+        btn.classList.remove('testing');
+        btn.classList.add('test-failed');
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.classList.remove('test-failed');
+          btn.disabled = false;
+        }, 2000);
+      }
+      // 刷新账号列表以显示错误状态
+      loadAccounts(true);
+    }
+  } catch (error) {
+    showNotification(`测试失败: ${error.message}`, 'error');
+    if (btn) {
+      btn.textContent = '✗ 失败';
+      btn.classList.remove('testing');
+      btn.classList.add('test-failed');
+      setTimeout(() => {
+        btn.textContent = originalText;
+        btn.classList.remove('test-failed');
+        btn.disabled = false;
+      }, 2000);
+    }
+  }
+}
+
 // 切换热重载面板折叠状态
 function toggleHotReloadPanel() {
   const body = document.querySelector('.hot-reload-body');
@@ -369,7 +428,10 @@ function renderSingleAccount(account) {
             ${account.subscription?.title ? `<span class="badge badge-subscription">${account.subscription.title}</span>` : ''}
           </div>
         </div>
-        ${account.status === 'error' ? `<button class="btn btn-small" onclick="resetAccount('${account.id}', event)">重置账号</button>` : ''}
+        <div class="single-account-actions">
+          <button class="btn-test" onclick="testAccount('${account.id}', event)">🧪 测试可用性</button>
+          ${account.status === 'error' ? `<button class="btn btn-small" onclick="resetAccount('${account.id}', event)">重置账号</button>` : ''}
+        </div>
       </div>
 
       ${account.lastError ? `
@@ -514,7 +576,6 @@ function renderAccounts() {
                 <div class="account-email">${account.email || '未知邮箱'}</div>
                 <div class="account-meta">
                   <span class="account-nickname">${account.nickname || account.userId?.split('.')[1]?.substring(0, 12) || '-'}</span>
-                  ${account.status === 'error' ? `<button class="btn-reset-small" onclick="resetAccount('${account.id}', event)">重置</button>` : ''}
                 </div>
               </div>
             </div>
@@ -524,6 +585,11 @@ function renderAccounts() {
               </span>
               ${account.subscription?.title ? `<span class="badge badge-subscription">${account.subscription.title}</span>` : ''}
             </div>
+          </div>
+
+          <div class="account-actions">
+            <button class="btn-test-small" onclick="testAccount('${account.id}', event)" title="测试账号可用性">🧪 测试</button>
+            ${account.status === 'error' ? `<button class="btn-reset-small" onclick="resetAccount('${account.id}', event)">重置</button>` : ''}
           </div>
 
           <div class="account-quota">
