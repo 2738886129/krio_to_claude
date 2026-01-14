@@ -1,8 +1,3 @@
-
-
-基于代码地图中的信息，我来为你生成一个完整的 README.md 文件。
-
-```markdown
 # Kiro to Claude API 桥接服务
 
 一个高性能的 API 代理服务，用于将 Kiro API 请求转换为 Claude API 格式，支持多账号管理、自动切换和实时监控。
@@ -44,6 +39,8 @@ npm install
 ```
 
 **方式二：多账号模式（推荐）**
+
+> 💡 该文件结构与 Kiro 账号管理器的导出格式兼容，可直接通过 Kiro 账号管理器生成使用。
 
 创建 `config/kiro-accounts.json` 文件：
 
@@ -122,18 +119,18 @@ node src/claude-api-server.js
 {
   "port": 3000,
   "host": "0.0.0.0",
-  "accountMode": "multi",      // "single" 或 "multi"
-  "strategy": "auto",          // 账号选择策略
-  "autoSwitchOnError": true,   // 错误时自动切换
+  "accountMode": "multi",        // "single" 或 "multi"
+  "strategy": "auto",            // 账号选择策略
+  "autoSwitchOnError": true,     // 错误时自动切换
   "connectionPool": {
-    "maxSockets": 10,          // 最大并发连接数
-    "maxFreeSockets": 5,       // 空闲连接池大小
-    "socketTimeout": 60000,    // Socket 超时（毫秒）
-    "requestTimeout": 120000   // 请求超时（毫秒）
+    "maxSockets": 10,            // 最大并发连接数
+    "maxFreeSockets": 5,         // 空闲连接池大小
+    "socketTimeout": 60000,      // Socket 超时（毫秒）
+    "requestTimeout": 120000     // 请求超时（毫秒）
   },
   "tokenRefresh": {
-    "bufferSeconds": 300,      // 刷新令牌提前时间
-    "retryAttempts": 3         // 重试次数
+    "bufferSeconds": 300,        // 刷新令牌提前时间
+    "retryAttempts": 3           // 重试次数
   }
 }
 ```
@@ -215,16 +212,19 @@ async function listModels() {
 ## 🐛 故障排查
 
 ### 账号无法连接
+
 - 检查 Token 是否过期
 - 确认账号状态是否正常
 - 查看服务器日志获取详细错误信息
 
 ### 自动切换失败
+
 - 确保配置了多个可用账号
 - 检查 `autoSwitchOnError` 是否启用
 - 查看账号优先级配置
 
 ### 请求超时
+
 - 调整 `connectionPool` 配置中的超时时间
 - 检查网络连接状态
 - 确认 Kiro API 服务是否正常
@@ -240,15 +240,6 @@ async function listModels() {
 ## 📞 支持
 
 如有问题，请通过以下方式联系：
+
 - 提交 [GitHub Issue](https://gitee.com/shangyuhang_gitee/krio_to_claude/issues)
 - 发送邮件至项目维护者
-```
-
-这个 README.md 文件包含了项目的所有核心信息：
-1. **核心特性** - 突出项目的关键功能
-2. **快速开始** - 简洁明了的上手指南
-3. **项目结构** - 清晰的文件目录说明
-4. **配置说明** - 详细的配置项解释
-5. **使用示例** - 实用的代码示例
-6. **API 端点** - 完整的接口文档
-7. **故障排查** - 常见问题解决方案

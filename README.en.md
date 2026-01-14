@@ -40,6 +40,8 @@ Rename `config/kiro-auth-token.example.json` to `kiro-auth-token.json` and fill 
 
 **Option 2: Multi-Account Mode (Recommended)**
 
+> 💡 This file structure is compatible with the Kiro Account Manager export format and can be generated directly using the Kiro Account Manager.
+
 Create a `config/kiro-accounts.json` file:
 
 ```json
@@ -117,18 +119,18 @@ Once started, access the service at http://localhost:3000
 {
   "port": 3000,
   "host": "0.0.0.0",
-  "accountMode": "multi",      // "single" or "multi"
-  "strategy": "auto",          // Account selection strategy
-  "autoSwitchOnError": true,   // Auto-switch on error
+  "accountMode": "multi",        // "single" or "multi"
+  "strategy": "auto",            // Account selection strategy
+  "autoSwitchOnError": true,     // Auto-switch on error
   "connectionPool": {
-    "maxSockets": 10,          // Maximum concurrent connections
-    "maxFreeSockets": 5,       // Idle connection pool size
-    "socketTimeout": 60000,    // Socket timeout (milliseconds)
-    "requestTimeout": 120000   // Request timeout (milliseconds)
+    "maxSockets": 10,            // Maximum concurrent connections
+    "maxFreeSockets": 5,         // Idle connection pool size
+    "socketTimeout": 60000,      // Socket timeout (milliseconds)
+    "requestTimeout": 120000     // Request timeout (milliseconds)
   },
   "tokenRefresh": {
-    "bufferSeconds": 300,      // Token refresh buffer time
-    "retryAttempts": 3         // Number of retry attempts
+    "bufferSeconds": 300,        // Token refresh buffer time
+    "retryAttempts": 3           // Number of retry attempts
   }
 }
 ```
@@ -210,16 +212,19 @@ async function listModels() {
 ## 🐛 Troubleshooting
 
 ### Account Connection Issues
+
 - Check if token has expired
 - Verify account status is active
 - Review server logs for detailed error information
 
 ### Automatic Switching Failure
+
 - Ensure multiple valid accounts are configured
 - Confirm `autoSwitchOnError` is enabled
 - Check account priority settings
 
 ### Request Timeouts
+
 - Adjust timeout values in `connectionPool` configuration
 - Verify network connectivity
 - Confirm Kiro API service is operational
@@ -235,5 +240,6 @@ Issues and pull requests are welcome!
 ## 📞 Support
 
 For assistance, please contact via:
+
 - Submit a [GitHub Issue](https://gitee.com/shangyuhang_gitee/krio_to_claude/issues)
 - Email the project maintainer
