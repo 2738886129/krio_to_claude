@@ -9,6 +9,7 @@ const path = require('path');
 const { exec } = require('child_process');
 const webAdminRouter = require('./web-admin');
 const logger = require('./logger');
+const { configWatcher } = require('./configWatcher');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -99,24 +100,107 @@ function formatClaudeError(error, defaultStatus = 500) {
   };
 }
 
-// 加载服务器配置
-let serverConfig = {
-  server: { host: '0.0.0.0', port: 3000 },
-  stream: { chunkSize: 4 },
-  token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 },
-  connectionPool: { maxSockets: 20, maxFreeSockets: 10, socketTimeout: 60000, requestTimeout: 30000 },
-  account: { multiAccountEnabled: false, strategy: 'auto', autoSwitchOnError: true }
-};
+// 加载服务器配置（使用 configWatcher）
+configWatcher.loadAll();
+let serverConfig = configWatcher.get('server');
+log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
+log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
+log(`   连接池配置: maxSockets=${serverConfig.connectionPool.maxSockets}, maxFreeSockets=${serverConfig.connectionPool.maxFreeSockets}, socketTimeout=${serverConfig.connectionPool.socketTimeout}ms`);
+log(`   账号配置: 多账号模式=${serverConfig.account.multiAccountEnabled ? '启用' : '禁用'}, 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
 
-try {
-  const configFile = fs.readFileSync(path.join(__dirname, '..', 'config', 'server-config.json'), 'utf8');
-  serverConfig = { ...serverConfig, ...JSON.parse(configFile) };
-  log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
-  log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
-  log(`   连接池配置: maxSockets=${serverConfig.connectionPool.maxSockets}, maxFreeSockets=${serverConfig.connectionPool.maxFreeSockets}, socketTimeout=${serverConfig.connectionPool.socketTimeout}ms`);
-  log(`   账号配置: 多账号模式=${serverConfig.account.multiAccountEnabled ? '启用' : '禁用'}, 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
-} catch (error) {
-  log('⚠️ 无法加载服务器配置，使用默认值');
+// 启动配置文件监听
+configWatcher.startWatching();
+
+// 监听配置变化事件
+configWatcher.on('configChanged', (event) => {
+  const { key, filename, changes, manual } = event;
+  
+  log(`\n🔄 配置热重载: ${filename} ${manual ? '(手动触发)' : '(自动检测)'}`);
+  
+  if (changes && changes.length > 0) {
+    log(`   变更项: ${changes.length} 个`);
+    changes.forEach(change => {
+      if (change.type === 'changed') {
+        log(`   • ${change.path}: ${JSON.stringify(change.oldValue)} -> ${JSON.stringify(change.newValue)}`);
+      } else if (change.type === 'added') {
+        log(`   + ${change.path}: ${JSON.stringify(change.newValue)}`);
+      } else if (change.type === 'removed') {
+        log(`   - ${change.path}: ${JSON.stringify(change.oldValue)}`);
+      }
+    });
+  }
+
+  // 根据配置类型执行相应的热重载操作
+  if (key === 'server') {
+    handleServerConfigReload(event.newConfig);
+  } else if (key === 'models') {
+    handleModelConfigReload(event.newConfig);
+  } else if (key === 'accounts') {
+    log(`   账号配置已更新，将在下次请求时生效`);
+  }
+});
+
+/**
+ * 处理服务器配置热重载
+ */
+function handleServerConfigReload(newConfig) {
+  const oldConfig = serverConfig;
+  serverConfig = newConfig;
+
+  // 检查账号模式是否变化 - 这是危险操作
+  const oldMultiAccount = oldConfig?.account?.multiAccountEnabled || false;
+  const newMultiAccount = newConfig?.account?.multiAccountEnabled || false;
+  
+  if (oldMultiAccount !== newMultiAccount) {
+    log(`   ⚠️ 账号模式已变更: ${oldMultiAccount ? '多账号' : '单账号'} -> ${newMultiAccount ? '多账号' : '单账号'}`);
+    log(`   ⚠️ 此更改需要重启服务器才能完全生效，当前请求可能使用旧模式`);
+    // 不自动切换，因为可能导致状态不一致
+  }
+
+  // 检查连接池配置是否变化
+  const oldPool = oldConfig?.connectionPool || {};
+  const newPool = newConfig?.connectionPool || {};
+  const poolChanged = 
+    oldPool.maxSockets !== newPool.maxSockets ||
+    oldPool.maxFreeSockets !== newPool.maxFreeSockets ||
+    oldPool.socketTimeout !== newPool.socketTimeout ||
+    oldPool.requestTimeout !== newPool.requestTimeout;
+
+  if (poolChanged && kiroClient) {
+    log(`   🔄 重新创建 KiroClient（连接池配置已变更）`);
+    if (kiroClient.destroy) {
+      kiroClient.destroy();
+    }
+    kiroClient = new KiroClient(currentToken, {
+      maxSockets: newPool.maxSockets,
+      maxFreeSockets: newPool.maxFreeSockets,
+      socketTimeout: newPool.socketTimeout,
+      timeout: newPool.requestTimeout
+    });
+    log(`   ✅ KiroClient 已重建`);
+  }
+
+  // 检查日志配置是否变化
+  const oldLogging = oldConfig?.logging || {};
+  const newLogging = newConfig?.logging || {};
+  if (newLogging.level && newLogging.level !== oldLogging.level) {
+    logger.setLogLevel(newLogging.level);
+    log(`   ✅ 日志级别已更新为: ${newLogging.level}`);
+  }
+  if (newLogging.rotation) {
+    logger.setRotationConfig(newLogging.rotation);
+    log(`   ✅ 日志轮转配置已更新`);
+  }
+
+  // 检查 Token 刷新配置是否变化
+  const oldToken = oldConfig?.token || {};
+  const newToken = newConfig?.token || {};
+  if (oldToken.refreshBufferMinutes !== newToken.refreshBufferMinutes) {
+    log(`   ⏰ Token 刷新缓冲时间已更新: ${newToken.refreshBufferMinutes} 分钟`);
+    scheduleNextRefresh(); // 重新调度刷新
+  }
+
+  log(`   ✅ 服务器配置热重载完成`);
 }
 
 /**
@@ -220,23 +304,19 @@ function openBrowser(url) {
   });
 }
 
-// 加载模型映射配置
-let modelMapping = {};
-let defaultModel = 'claude-sonnet-4.5';
+// 加载模型映射配置（使用 configWatcher）
+let modelConfig = configWatcher.get('models');
+let modelMapping = modelConfig?.mappings || {};
+let defaultModel = modelConfig?.defaultModel || 'claude-sonnet-4.5';
+log(`✅ 加载模型映射配置: ${Object.keys(modelMapping).length} 个映射`);
 
-try {
-  const mappingFile = fs.readFileSync(path.join(__dirname, '..', 'config', 'model-mapping.json'), 'utf8');
-  const mappingConfig = JSON.parse(mappingFile);
-  modelMapping = mappingConfig.mappings || {};
-  defaultModel = mappingConfig.defaultModel || 'claude-sonnet-4.5';
-  log(`✅ 加载模型映射配置: ${Object.keys(modelMapping).length} 个映射`);
-} catch (error) {
-  logError('无法加载模型映射配置，使用默认映射', error);
-  modelMapping = {
-    'claude-sonnet-4.5': 'claude-sonnet-4.5',
-    'claude-haiku-4.5': 'claude-haiku-4.5',
-    'claude-opus-4.5': 'claude-opus-4.5'
-  };
+/**
+ * 处理模型配置热重载
+ */
+function handleModelConfigReload(newConfig) {
+  modelMapping = newConfig?.mappings || {};
+  defaultModel = newConfig?.defaultModel || 'claude-sonnet-4.5';
+  log(`   ✅ 模型映射已更新: ${Object.keys(modelMapping).length} 个映射, 默认模型: ${defaultModel}`);
 }
 
 function mapModelId(claudeModelId) {
@@ -1510,9 +1590,45 @@ const server = app.listen(PORT, HOST, () => {
   openBrowser(webUrl);
 });
 
+// 服务器错误处理
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    logError(`❌ 端口 ${PORT} 已被占用！`);
+    log('');
+    log('可能的解决方案:');
+    log(`  1. 关闭占用端口 ${PORT} 的程序`);
+    log(`  2. 修改 config/server-config.json 中的端口配置`);
+    log('');
+    log('查找占用端口的进程:');
+    if (process.platform === 'win32') {
+      log(`  netstat -ano | findstr :${PORT}`);
+      log(`  然后使用 taskkill /PID <进程ID> /F 结束进程`);
+    } else {
+      log(`  lsof -i :${PORT}`);
+      log(`  或 netstat -tlnp | grep :${PORT}`);
+    }
+    log('');
+  } else if (error.code === 'EACCES') {
+    logError(`❌ 没有权限绑定端口 ${PORT}！`);
+    log('');
+    log('可能的解决方案:');
+    log('  1. 使用大于 1024 的端口号');
+    log('  2. 以管理员/root 权限运行');
+    log('');
+  } else {
+    logError(`❌ 服务器启动失败: ${error.message}`);
+    log(`   错误代码: ${error.code}`);
+  }
+  process.exit(1);
+});
+
 // 优雅关闭处理
 async function gracefulShutdown(signal) {
   log(`\n📴 收到 ${signal} 信号，正在优雅关闭...`);
+  
+  // 停止配置文件监听
+  configWatcher.stopWatching();
+  log('✅ 配置文件监听已停止');
   
   // 清理 Token 刷新定时器
   if (refreshTimer) {

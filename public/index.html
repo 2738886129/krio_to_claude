@@ -947,6 +947,875 @@
       }
     }
 
+    /* 热重载面板样式 - 现代化设计 */
+    .hot-reload-panel {
+      background: white;
+      border-radius: 16px;
+      padding: 0;
+      margin-bottom: 25px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      overflow: hidden;
+      border: 1px solid #e5e7eb;
+    }
+
+    .hot-reload-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 20px 24px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .hot-reload-header:hover {
+      filter: brightness(1.05);
+    }
+
+    .hot-reload-header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .hot-reload-toggle-icon {
+      font-size: 12px;
+      transition: transform 0.3s ease;
+      opacity: 0.8;
+    }
+
+    .hot-reload-panel.expanded .hot-reload-toggle-icon {
+      transform: rotate(180deg);
+    }
+
+    .hot-reload-title-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .hot-reload-icon {
+      width: 44px;
+      height: 44px;
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      backdrop-filter: blur(10px);
+    }
+
+    .hot-reload-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0;
+      letter-spacing: -0.3px;
+    }
+
+    .hot-reload-subtitle {
+      font-size: 13px;
+      opacity: 0.85;
+      margin-top: 2px;
+    }
+
+    .hot-reload-status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 16px;
+      border-radius: 24px;
+      font-size: 13px;
+      font-weight: 600;
+      background: rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(10px);
+    }
+
+    .hot-reload-status-badge.online {
+      background: rgba(16, 185, 129, 0.25);
+    }
+
+    .hot-reload-status-badge.offline {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    .hot-reload-status-badge.offline .status-dot {
+      background: #ef4444;
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.6; transform: scale(1.1); }
+    }
+
+    .hot-reload-body {
+      padding: 20px 24px;
+      max-height: 500px;
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+
+    .hot-reload-body.collapsed {
+      max-height: 0;
+      padding: 0 24px;
+    }
+
+    .hot-reload-files-section {
+      margin-bottom: 20px;
+    }
+
+    .hot-reload-files-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .hot-reload-files-label::before {
+      content: "📁";
+      font-size: 14px;
+    }
+
+    .hot-reload-files-grid {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .file-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 13px;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .file-tag::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      opacity: 0;
+      transition: opacity 0.25s;
+    }
+
+    .file-tag:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.25);
+      border-color: #667eea;
+    }
+
+    .file-tag:hover::before {
+      opacity: 1;
+    }
+
+    .file-tag span {
+      position: relative;
+      z-index: 1;
+      transition: color 0.25s;
+    }
+
+    .file-tag:hover span {
+      color: white;
+    }
+
+    .file-tag-icon {
+      font-size: 14px;
+      transition: transform 0.25s;
+    }
+
+    .file-tag:hover .file-tag-icon {
+      transform: rotate(15deg);
+    }
+
+    .hot-reload-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hot-reload-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .hot-reload-btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      box-shadow: 0 4px 14px rgba(102, 126, 234, 0.35);
+    }
+
+    .hot-reload-btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.45);
+    }
+
+    .hot-reload-btn-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+    }
+
+    .hot-reload-btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(16, 185, 129, 0.45);
+    }
+
+    .hot-reload-btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+      box-shadow: 0 4px 14px rgba(239, 68, 68, 0.35);
+    }
+
+    .hot-reload-btn-danger:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(239, 68, 68, 0.45);
+    }
+
+    .hot-reload-btn:active {
+      transform: translateY(0);
+    }
+
+    .hot-reload-btn-icon {
+      font-size: 16px;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+    }
+
+    .btn-danger {
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+    }
+
+    /* 配置编辑器样式 */
+    .config-editor {
+      background: #fff;
+    }
+
+    .config-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 25px;
+      padding-bottom: 15px;
+      border-bottom: 2px solid #e5e7eb;
+    }
+
+    .config-header h3 {
+      color: #374151;
+      font-size: 20px;
+      margin: 0;
+    }
+
+    .config-actions {
+      display: flex;
+      gap: 10px;
+    }
+
+    .config-section {
+      background: #f9fafb;
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .config-section h4 {
+      color: #374151;
+      font-size: 16px;
+      margin: 0 0 15px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .restart-hint {
+      font-size: 12px;
+      font-weight: normal;
+      color: #f59e0b;
+      background: #fef3c7;
+      padding: 2px 8px;
+      border-radius: 4px;
+    }
+
+    .section-desc {
+      color: #6b7280;
+      font-size: 13px;
+      margin: -10px 0 15px 0;
+    }
+
+    .config-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+    }
+
+    .config-field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .config-field label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .config-field input[type="text"],
+    .config-field input[type="number"],
+    .config-field select {
+      padding: 10px 14px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s;
+      background: white;
+    }
+
+    .config-field input:focus,
+    .config-field select:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+
+    .field-hint {
+      font-size: 11px;
+      color: #9ca3af;
+    }
+
+    .checkbox-field {
+      flex-direction: row;
+      align-items: center;
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      font-weight: normal !important;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+      accent-color: #667eea;
+    }
+
+    .checkbox-text {
+      font-size: 14px;
+      color: #374151;
+    }
+
+    /* 模型映射行样式 */
+    .mapping-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px;
+      background: white;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .mapping-row:hover {
+      border-color: #667eea;
+    }
+
+    .mapping-input {
+      flex: 1;
+      padding: 10px 14px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: all 0.2s;
+    }
+
+    .mapping-input:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .mapping-arrow {
+      color: #9ca3af;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .btn-icon {
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      background: #f3f4f6;
+    }
+
+    .btn-icon:hover {
+      background: #e5e7eb;
+    }
+
+    .btn-delete:hover {
+      background: #fee2e2;
+    }
+
+    /* 重启对话框样式 */
+    .restart-dialog-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      animation: fadeIn 0.2s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .restart-dialog {
+      background: white;
+      border-radius: 16px;
+      padding: 30px;
+      max-width: 400px;
+      text-align: center;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .restart-dialog-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+    }
+
+    .restart-dialog h3 {
+      color: #374151;
+      margin: 0 0 10px 0;
+      font-size: 20px;
+    }
+
+    .restart-dialog p {
+      color: #6b7280;
+      margin: 0 0 15px 0;
+      font-size: 14px;
+    }
+
+    .restart-dialog ul {
+      text-align: left;
+      color: #6b7280;
+      font-size: 13px;
+      margin: 0 0 20px 20px;
+      padding: 0;
+    }
+
+    .restart-dialog li {
+      margin-bottom: 5px;
+    }
+
+    .restart-dialog-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+
+    /* 上传对话框样式 */
+    .upload-dialog-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .upload-dialog {
+      background: white;
+      border-radius: 16px;
+      width: 500px;
+      max-width: 90%;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .upload-dialog-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .upload-dialog-header h3 {
+      margin: 0;
+      color: #374151;
+    }
+
+    .btn-close {
+      width: 32px;
+      height: 32px;
+      border: none;
+      background: #f3f4f6;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    .btn-close:hover {
+      background: #e5e7eb;
+    }
+
+    .upload-dialog-body {
+      padding: 20px;
+    }
+
+    .upload-dialog-body p {
+      margin: 0 0 15px 0;
+      color: #6b7280;
+    }
+
+    .upload-dialog-body code {
+      background: #f3f4f6;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .upload-methods {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 15px;
+    }
+
+    .upload-or {
+      color: #9ca3af;
+      font-size: 13px;
+    }
+
+    .upload-dialog-body textarea {
+      width: 100%;
+      height: 200px;
+      padding: 12px;
+      border: 2px solid #e5e7eb;
+      border-radius: 8px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      resize: vertical;
+    }
+
+    .upload-dialog-body textarea:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .upload-dialog-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 15px 20px;
+      border-top: 1px solid #e5e7eb;
+      background: #f9fafb;
+      border-radius: 0 0 16px 16px;
+    }
+
+    /* 认证配置卡片样式 */
+    .auth-config-status {
+      margin-bottom: 20px;
+    }
+
+    .auth-config-cards {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+
+    .auth-config-card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 15px;
+      transition: all 0.3s ease;
+    }
+
+    .auth-config-card-single {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 15px;
+    }
+
+    .account-mode-switch {
+      margin-bottom: 15px;
+      padding-bottom: 15px;
+      border-bottom: 1px dashed #e5e7eb;
+    }
+
+    .multi-account-options {
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px dashed #e5e7eb;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .auth-config-separator {
+      color: #d1d5db;
+      margin: 0 8px;
+    }
+
+    .auth-config-warning {
+      color: #d97706 !important;
+    }
+
+    .auth-config-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .auth-config-title {
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .auth-config-badge {
+      font-size: 12px;
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
+    .auth-config-info {
+      font-size: 13px;
+      color: #6b7280;
+      margin-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .auth-config-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .btn-small {
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 600px) {
+      .auth-config-cards {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* 单账号模式样式 */
+    .single-account-mode-notice {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+      border: 1px solid #bae6fd;
+      border-radius: 10px;
+      margin-bottom: 20px;
+    }
+
+    .single-account-mode-notice .notice-icon {
+      font-size: 20px;
+    }
+
+    .single-account-mode-notice .notice-text {
+      font-size: 14px;
+      color: #0369a1;
+    }
+
+    .single-account-card {
+      background: white;
+      border-radius: 16px;
+      padding: 24px;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+    }
+
+    .single-account-card.error {
+      border-color: #fca5a5;
+    }
+
+    .single-account-header {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .single-account-avatar {
+      width: 64px;
+      height: 64px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 600;
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .single-account-card.error .single-account-avatar {
+      background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+    }
+
+    .single-account-info {
+      flex: 1;
+    }
+
+    .single-account-email {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1f2937;
+      margin-bottom: 8px;
+    }
+
+    .single-account-meta {
+      display: flex;
+      gap: 8px;
+    }
+
+    .single-account-error {
+      padding: 12px 16px;
+      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+      border-radius: 10px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      color: #991b1b;
+      border-left: 4px solid #ef4444;
+    }
+
+    .single-account-quota {
+      margin-bottom: 20px;
+    }
+
+    .single-account-quota .quota-header {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: 14px;
+      color: #6b7280;
+    }
+
+    .single-account-quota .quota-value {
+      font-weight: 600;
+      color: #374151;
+    }
+
+    .single-account-details {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+      padding-top: 20px;
+      border-top: 1px dashed #e5e7eb;
+    }
+
+    .detail-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .detail-label {
+      font-size: 12px;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .detail-value {
+      font-size: 14px;
+      color: #374151;
+      word-break: break-all;
+    }
+
+    .single-account-empty {
+      text-align: center;
+      padding: 60px 20px;
+      color: #6b7280;
+    }
+
+    .single-account-empty .icon {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+
+    .single-account-empty .title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #374151;
+      margin-bottom: 8px;
+    }
+
+    .single-account-empty .desc {
+      font-size: 14px;
+    }
+
   </style>
 </head>
 <body>

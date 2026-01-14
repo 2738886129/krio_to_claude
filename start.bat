@@ -27,12 +27,21 @@ if not exist "node_modules" (
     echo.
 )
 
-:: 启动服务器
+:: 自动重启循环
+:start
+echo [启动] 正在启动服务器...
 node src/claude-api-server.js
+set exitcode=%errorlevel%
 
-:: 如果服务器退出，暂停显示错误
-if %errorlevel% neq 0 (
+:: 退出码 0 表示正常重启请求
+if %exitcode% equ 0 (
     echo.
-    echo [错误] 服务器异常退出，错误代码: %errorlevel%
-    pause
+    echo [重启] 服务器请求重启，3 秒后重新启动...
+    timeout /t 3 /nobreak >nul
+    goto start
 )
+
+:: 其他退出码表示异常
+echo.
+echo [错误] 服务器异常退出，错误代码: %exitcode%
+pause

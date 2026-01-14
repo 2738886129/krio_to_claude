@@ -4,6 +4,7 @@ const path = require('path');
 const { refreshAccountToken, markAccountError } = require('./loadMultiAccount');
 const KiroClient = require('./KiroClient');
 const { log, LOGS_DIR, LOG_LEVELS, setLogLevel, getLogLevel, setRotationConfig, getStatus, rotateAll } = require('./logger');
+const { configWatcher, CONFIG_FILES } = require('./configWatcher');
 
 const router = express.Router();
 
@@ -48,6 +49,198 @@ router.get('/api/config', (req, res) => {
   }
 });
 
+// 保存服务器配置
+router.put('/api/config', (req, res) => {
+  try {
+    const configFile = path.join(CONFIG_DIR, 'server-config.json');
+    const newConfig = req.body;
+    
+    // 验证配置格式
+    if (!newConfig || typeof newConfig !== 'object') {
+      return res.status(400).json({ error: '无效的配置格式' });
+    }
+    
+    // 读取旧配置，检查是否需要重启
+    let oldConfig = {};
+    try {
+      oldConfig = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    } catch (e) {}
+    
+    const needsRestart = 
+      newConfig.server?.host !== oldConfig.server?.host ||
+      newConfig.server?.port !== oldConfig.server?.port ||
+      newConfig.account?.multiAccountEnabled !== oldConfig.account?.multiAccountEnabled;
+    
+    // 检查账号模式切换时的配置文件
+    if (newConfig.account?.multiAccountEnabled !== oldConfig.account?.multiAccountEnabled) {
+      if (newConfig.account?.multiAccountEnabled) {
+        // 切换到多账号模式，检查 kiro-accounts.json
+        const accountsFile = path.join(CONFIG_DIR, 'kiro-accounts.json');
+        if (!fs.existsSync(accountsFile)) {
+          return res.status(400).json({ 
+            error: '切换到多账号模式需要 kiro-accounts.json 配置文件',
+            missingFile: 'kiro-accounts.json'
+          });
+        }
+        try {
+          const accounts = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+          if (!accounts.accounts || accounts.accounts.length === 0) {
+            return res.status(400).json({ 
+              error: 'kiro-accounts.json 中没有配置任何账号',
+              missingFile: 'kiro-accounts.json'
+            });
+          }
+        } catch (e) {
+          return res.status(400).json({ error: `kiro-accounts.json 格式错误: ${e.message}` });
+        }
+      } else {
+        // 切换到单账号模式，检查 kiro-auth-token.json
+        const tokenFile = path.join(CONFIG_DIR, 'kiro-auth-token.json');
+        if (!fs.existsSync(tokenFile)) {
+          return res.status(400).json({ 
+            error: '切换到单账号模式需要 kiro-auth-token.json 配置文件',
+            missingFile: 'kiro-auth-token.json'
+          });
+        }
+        try {
+          const token = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
+          if (!token.accessToken || token.accessToken === 'YOUR_ACCESS_TOKEN_HERE') {
+            return res.status(400).json({ 
+              error: 'kiro-auth-token.json 中没有配置有效的 accessToken',
+              missingFile: 'kiro-auth-token.json'
+            });
+          }
+        } catch (e) {
+          return res.status(400).json({ error: `kiro-auth-token.json 格式错误: ${e.message}` });
+        }
+      }
+    }
+    
+    // 写入文件
+    fs.writeFileSync(configFile, JSON.stringify(newConfig, null, 2), 'utf8');
+    log(`✅ 服务器配置已保存`);
+    
+    // 触发热重载
+    configWatcher.reload('server');
+    
+    res.json({ 
+      success: true, 
+      message: needsRestart ? '配置已保存，需要重启生效' : '配置已保存并重载',
+      needsRestart 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 检查认证配置文件状态
+router.get('/api/auth-config/status', (req, res) => {
+  try {
+    const result = {
+      singleAccount: { exists: false, valid: false, info: null },
+      multiAccount: { exists: false, valid: false, count: 0, activeCount: 0 }
+    };
+    
+    // 检查单账号配置
+    const tokenFile = path.join(CONFIG_DIR, 'kiro-auth-token.json');
+    if (fs.existsSync(tokenFile)) {
+      result.singleAccount.exists = true;
+      try {
+        const token = JSON.parse(fs.readFileSync(tokenFile, 'utf8'));
+        if (token.accessToken && token.accessToken !== 'YOUR_ACCESS_TOKEN_HERE') {
+          result.singleAccount.valid = true;
+          result.singleAccount.info = {
+            provider: token.provider || 'Unknown',
+            expiresAt: token.expiresAt
+          };
+        }
+      } catch (e) {}
+    }
+    
+    // 检查多账号配置
+    const accountsFile = path.join(CONFIG_DIR, 'kiro-accounts.json');
+    if (fs.existsSync(accountsFile)) {
+      result.multiAccount.exists = true;
+      try {
+        const accounts = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+        if (accounts.accounts && accounts.accounts.length > 0) {
+          result.multiAccount.valid = true;
+          result.multiAccount.count = accounts.accounts.length;
+          result.multiAccount.activeCount = accounts.accounts.filter(a => a.status === 'active').length;
+        }
+      } catch (e) {}
+    }
+    
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 上传单账号配置
+router.post('/api/auth-config/single', (req, res) => {
+  try {
+    const tokenData = req.body;
+    
+    if (!tokenData || !tokenData.accessToken) {
+      return res.status(400).json({ error: '缺少 accessToken' });
+    }
+    
+    if (!tokenData.refreshToken) {
+      return res.status(400).json({ error: '缺少 refreshToken' });
+    }
+    
+    const tokenFile = path.join(CONFIG_DIR, 'kiro-auth-token.json');
+    fs.writeFileSync(tokenFile, JSON.stringify(tokenData, null, 2), 'utf8');
+    log(`✅ 单账号配置已保存`);
+    
+    res.json({ success: true, message: '单账号配置已保存' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 上传多账号配置
+router.post('/api/auth-config/multi', (req, res) => {
+  try {
+    const accountsData = req.body;
+    
+    if (!accountsData || !accountsData.accounts || !Array.isArray(accountsData.accounts)) {
+      return res.status(400).json({ error: '无效的账号配置格式' });
+    }
+    
+    if (accountsData.accounts.length === 0) {
+      return res.status(400).json({ error: '账号列表不能为空' });
+    }
+    
+    const accountsFile = path.join(CONFIG_DIR, 'kiro-accounts.json');
+    fs.writeFileSync(accountsFile, JSON.stringify(accountsData, null, 2), 'utf8');
+    log(`✅ 多账号配置已保存，共 ${accountsData.accounts.length} 个账号`);
+    
+    // 触发热重载
+    configWatcher.reload('accounts');
+    
+    res.json({ 
+      success: true, 
+      message: `多账号配置已保存，共 ${accountsData.accounts.length} 个账号` 
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 重启服务器
+router.post('/api/server/restart', (req, res) => {
+  log('🔄 收到重启请求，服务器将在 1 秒后重启...');
+  res.json({ success: true, message: '服务器正在重启...' });
+  
+  // 延迟重启，让响应先发送出去
+  setTimeout(() => {
+    log('🔄 正在重启服务器...');
+    process.exit(0); // 退出码 0，让守护进程重启
+  }, 1000);
+});
+
 // 获取模型映射
 router.get('/api/models', (req, res) => {
   try {
@@ -62,6 +255,27 @@ router.get('/api/models', (req, res) => {
 
     const models = JSON.parse(fs.readFileSync(modelsFile, 'utf8'));
     res.json(models);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 保存模型映射配置
+router.put('/api/models', (req, res) => {
+  try {
+    const modelsFile = path.join(CONFIG_DIR, 'model-mapping.json');
+    const newConfig = req.body;
+    
+    if (!newConfig || typeof newConfig !== 'object') {
+      return res.status(400).json({ error: '无效的配置格式' });
+    }
+    
+    fs.writeFileSync(modelsFile, JSON.stringify(newConfig, null, 2), 'utf8');
+    log(`✅ 模型映射配置已保存`);
+    
+    configWatcher.reload('models');
+    
+    res.json({ success: true, message: '模型映射已保存并重载' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -200,6 +414,63 @@ router.post('/api/logger/rotate', (req, res) => {
     rotateAll();
     log('手动触发日志轮转完成');
     res.json({ success: true, message: '日志轮转已触发' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================== 配置热重载 API ====================
+
+// 获取热重载状态
+router.get('/api/config/hot-reload/status', (req, res) => {
+  try {
+    const status = configWatcher.getStatus();
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 手动触发配置重载
+router.post('/api/config/hot-reload', (req, res) => {
+  try {
+    const { configKey } = req.body;
+    
+    if (configKey && !CONFIG_FILES[configKey]) {
+      return res.status(400).json({
+        error: `无效的配置类型: ${configKey}`,
+        validKeys: Object.keys(CONFIG_FILES)
+      });
+    }
+
+    const result = configWatcher.reload(configKey);
+    log(`🔄 手动触发配置重载: ${configKey || '全部'}`);
+    
+    res.json({
+      success: true,
+      message: configKey ? `配置 ${configKey} 已重载` : '所有配置已重载',
+      config: result
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 启动配置监听
+router.post('/api/config/hot-reload/start', (req, res) => {
+  try {
+    configWatcher.startWatching();
+    res.json({ success: true, message: '配置监听已启动' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 停止配置监听
+router.post('/api/config/hot-reload/stop', (req, res) => {
+  try {
+    configWatcher.stopWatching();
+    res.json({ success: true, message: '配置监听已停止' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

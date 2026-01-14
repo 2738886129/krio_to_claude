@@ -89,6 +89,21 @@ async function resetAccount(accountId, event) {
   }
 }
 
+// 切换热重载面板折叠状态
+function toggleHotReloadPanel() {
+  const body = document.querySelector('.hot-reload-body');
+  const icon = document.querySelector('.hot-reload-toggle-icon');
+  const panel = document.querySelector('.hot-reload-panel');
+  
+  if (body.classList.contains('collapsed')) {
+    body.classList.remove('collapsed');
+    panel.classList.add('expanded');
+  } else {
+    body.classList.add('collapsed');
+    panel.classList.remove('expanded');
+  }
+}
+
 // ============================================
 // 切换标签页
 // ============================================
@@ -236,6 +251,18 @@ function toggleDetails(accountId) {
 
 // 加载账号列表
 async function loadAccounts(forceRefresh = false) {
+  // 根据模式选择不同的容器
+  const isMultiAccount = AppState.isMultiAccountMode;
+  
+  if (isMultiAccount) {
+    await loadMultiAccounts(forceRefresh);
+  } else {
+    await loadSingleAccount(forceRefresh);
+  }
+}
+
+// 加载多账号列表
+async function loadMultiAccounts(forceRefresh = false) {
   const container = document.getElementById('accountsContainer');
   if (!container) return;
 
@@ -274,6 +301,117 @@ async function loadAccounts(forceRefresh = false) {
   } catch (error) {
     container.innerHTML = `<div class="error-message">加载失败: ${error.message}</div>`;
   }
+}
+
+// 加载单账号信息
+async function loadSingleAccount(forceRefresh = false) {
+  const container = document.getElementById('singleAccountContainer');
+  if (!container) return;
+
+  container.innerHTML = '<div class="loading">加载中...</div>';
+
+  try {
+    const response = await fetch('/api/accounts');
+    const data = await response.json();
+
+    if (!data.accounts || data.accounts.length === 0) {
+      container.innerHTML = `
+        <div class="single-account-empty">
+          <div class="icon">📭</div>
+          <div class="title">未配置账号</div>
+          <div class="desc">请在「服务器配置」中上传 kiro-auth-token.json 文件</div>
+        </div>
+      `;
+      updateSingleAccountStats(null);
+      return;
+    }
+
+    const account = data.accounts[0];
+    updateSingleAccountStats(account);
+    renderSingleAccount(account);
+  } catch (error) {
+    container.innerHTML = `<div class="error-message">加载失败: ${error.message}</div>`;
+  }
+}
+
+// 更新单账号统计信息
+function updateSingleAccountStats(account) {
+  if (account && account.status === 'active') {
+    document.getElementById('activeAccounts').textContent = '1';
+    document.getElementById('totalQuota').textContent = (account.usage?.limit || 0).toFixed(2);
+    document.getElementById('usedQuota').textContent = (account.usage?.current || 0).toFixed(2);
+  } else {
+    document.getElementById('activeAccounts').textContent = account ? '0' : '-';
+    document.getElementById('totalQuota').textContent = '-';
+    document.getElementById('usedQuota').textContent = '-';
+  }
+}
+
+// 渲染单账号信息
+function renderSingleAccount(account) {
+  const container = document.getElementById('singleAccountContainer');
+  if (!container) return;
+
+  const percentUsed = (account.usage?.percentUsed || 0) * 100;
+  const progressClass = percentUsed > 80 ? 'danger' : percentUsed > 50 ? 'warning' : '';
+  const initials = getInitials(account.email);
+
+  container.innerHTML = `
+    <div class="single-account-card ${account.status === 'error' ? 'error' : ''}">
+      <div class="single-account-header">
+        <div class="single-account-avatar">${initials}</div>
+        <div class="single-account-info">
+          <div class="single-account-email">${account.email || '未知邮箱'}</div>
+          <div class="single-account-meta">
+            <span class="badge ${account.status === 'active' ? 'badge-active' : 'badge-error'}">
+              ${account.status === 'active' ? '✓ 活跃' : '✗ 错误'}
+            </span>
+            ${account.subscription?.title ? `<span class="badge badge-subscription">${account.subscription.title}</span>` : ''}
+          </div>
+        </div>
+        ${account.status === 'error' ? `<button class="btn btn-small" onclick="resetAccount('${account.id}', event)">重置账号</button>` : ''}
+      </div>
+
+      ${account.lastError ? `
+        <div class="single-account-error">
+          <strong>错误信息:</strong> ${account.lastError}
+        </div>
+      ` : ''}
+
+      <div class="single-account-quota">
+        <div class="quota-header">
+          <span>额度使用情况</span>
+          <span class="quota-value">${(account.usage?.current || 0).toFixed(2)} / ${account.usage?.limit || 0} (${percentUsed.toFixed(1)}%)</span>
+        </div>
+        <div class="quota-bar">
+          <div class="quota-fill ${progressClass}" style="width: ${Math.min(percentUsed, 100)}%"></div>
+        </div>
+      </div>
+
+      <div class="single-account-details">
+        <div class="detail-row">
+          <span class="detail-label">用户 ID</span>
+          <span class="detail-value">${account.userId || '-'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">认证提供商</span>
+          <span class="detail-value">${account.idp || '-'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">订阅到期</span>
+          <span class="detail-value">${formatShortDate(account.subscription?.expiresAt)}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">剩余天数</span>
+          <span class="detail-value">${account.subscription?.daysRemaining || '-'} 天</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">最后使用</span>
+          <span class="detail-value">${formatDate(account.lastUsedAt)}</span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // 更新统计信息
@@ -458,99 +596,685 @@ function renderAccounts() {
 }
 
 // 初始化账号管理区域的 HTML 结构
-function initAccountsSection() {
+async function initAccountsSection() {
   const accountsSection = document.getElementById('accounts');
-  accountsSection.innerHTML = `
-    <h2>账号管理</h2>
+  
+  // 获取当前配置以确定账号模式
+  try {
+    const response = await fetch('/api/config');
+    const config = await response.json();
+    const isMultiAccount = config.account?.multiAccountEnabled || false;
+    
+    // 保存到全局状态
+    AppState.isMultiAccountMode = isMultiAccount;
+    
+    if (isMultiAccount) {
+      // 多账号模式：显示完整的账号管理界面
+      accountsSection.innerHTML = `
+        <h2>账号管理</h2>
 
-    <!-- 工具栏 -->
-    <div class="accounts-toolbar">
-      <div class="search-box">
-        <input type="text" placeholder="搜索邮箱、昵称或用户ID..."
-               oninput="searchAccounts(this.value)" id="searchInput">
-        <button class="search-clear" onclick="clearSearch()" title="清空搜索">✕</button>
-      </div>
-      <div class="filter-group">
-        <select class="filter-select" onchange="filterByStatus(this.value)">
-          <option value="all">全部状态</option>
-          <option value="active">仅活跃</option>
-          <option value="error">仅异常</option>
-        </select>
-        <select class="filter-select" onchange="sortAccounts(this.value)">
-          <option value="email">按邮箱排序</option>
-          <option value="quota">按额度排序</option>
-          <option value="usage">按使用率排序</option>
-        </select>
-        <div class="view-toggle">
-          <button class="view-btn active" data-mode="grid" onclick="setViewMode('grid')" title="网格视图">⊞</button>
-          <button class="view-btn" data-mode="list" onclick="setViewMode('list')" title="列表视图">☰</button>
+        <!-- 工具栏 -->
+        <div class="accounts-toolbar">
+          <div class="search-box">
+            <input type="text" placeholder="搜索邮箱、昵称或用户ID..."
+                   oninput="searchAccounts(this.value)" id="searchInput">
+            <button class="search-clear" onclick="clearSearch()" title="清空搜索">✕</button>
+          </div>
+          <div class="filter-group">
+            <select class="filter-select" onchange="filterByStatus(this.value)">
+              <option value="all">全部状态</option>
+              <option value="active">仅活跃</option>
+              <option value="error">仅异常</option>
+            </select>
+            <select class="filter-select" onchange="sortAccounts(this.value)">
+              <option value="email">按邮箱排序</option>
+              <option value="quota">按额度排序</option>
+              <option value="usage">按使用率排序</option>
+            </select>
+            <div class="view-toggle">
+              <button class="view-btn active" data-mode="grid" onclick="setViewMode('grid')" title="网格视图">⊞</button>
+              <button class="view-btn" data-mode="list" onclick="setViewMode('list')" title="列表视图">☰</button>
+            </div>
+          </div>
         </div>
-      </div>
-    </div>
 
-    <!-- 统计概览 -->
-    <div id="accountsOverview"></div>
+        <!-- 统计概览 -->
+        <div id="accountsOverview"></div>
 
-    <!-- 账号列表容器 -->
-    <div id="accountsContainer">
-      <div class="loading">加载中...</div>
-    </div>
-  `;
+        <!-- 账号列表容器 -->
+        <div id="accountsContainer">
+          <div class="loading">加载中...</div>
+        </div>
+      `;
+    } else {
+      // 单账号模式：显示简化的单账号信息
+      accountsSection.innerHTML = `
+        <h2>账号管理</h2>
+        <div class="single-account-mode-notice">
+          <div class="notice-icon">ℹ️</div>
+          <div class="notice-text">当前为单账号模式，如需管理多个账号，请在「服务器配置」中启用多账号模式</div>
+        </div>
+        <div id="singleAccountContainer">
+          <div class="loading">加载中...</div>
+        </div>
+      `;
+    }
+  } catch (error) {
+    accountsSection.innerHTML = `
+      <h2>账号管理</h2>
+      <div class="error-message">加载配置失败: ${error.message}</div>
+    `;
+  }
 }
 
 // ============================================
 // 加载服务器配置
 // ============================================
+let currentConfig = null;
+
 async function loadConfig() {
   const container = document.getElementById('configContent');
   container.innerHTML = '<div class="loading">加载中...</div>';
 
   try {
-    const response = await fetch('/api/config');
-    const config = await response.json();
+    const [configResponse, hotReloadResponse] = await Promise.all([
+      fetch('/api/config'),
+      fetch('/api/config/hot-reload/status')
+    ]);
+    
+    const config = await configResponse.json();
+    currentConfig = config;
+    const hotReloadStatus = await hotReloadResponse.json();
 
-    let html = '<h3 style="margin-bottom: 20px; color: #374151;">当前配置</h3>';
-
-    html += '<div class="config-item">';
-    html += '<label>服务器地址</label>';
-    html += `<div class="value">${config.server?.host || '0.0.0.0'}:${config.server?.port || 3000}</div>`;
+    let html = '';
+    
+    // 热重载控制面板 - 现代化设计（可折叠）
+    html += '<div class="hot-reload-panel">';
+    
+    // 头部区域（可点击折叠）
+    html += '<div class="hot-reload-header" onclick="toggleHotReloadPanel()">';
+    html += '<div class="hot-reload-title-group">';
+    html += '<div class="hot-reload-icon">🔄</div>';
+    html += '<div>';
+    html += '<h3 class="hot-reload-title">配置热重载</h3>';
+    html += '<div class="hot-reload-subtitle">实时监控配置文件变更</div>';
+    html += '</div></div>';
+    html += '<div class="hot-reload-header-right">';
+    html += `<div class="hot-reload-status-badge ${hotReloadStatus.watching ? 'online' : 'offline'}">`;
+    html += '<span class="status-dot"></span>';
+    html += `<span>${hotReloadStatus.watching ? '监听中' : '已停止'}</span>`;
     html += '</div>';
-
-    html += '<div class="config-item">';
-    html += '<label>账号模式</label>';
-    html += `<div class="value">${config.account?.multiAccountEnabled ? '多账号模式' : '单账号模式'}</div>`;
-    html += '</div>';
-
-    if (config.account?.multiAccountEnabled) {
-      html += '<div class="config-item">';
-      html += '<label>账号选择策略</label>';
-      html += `<div class="value">${config.account?.strategy || 'auto'}</div>`;
-      html += '</div>';
-
-      html += '<div class="config-item">';
-      html += '<label>自动切换账号</label>';
-      html += `<div class="value">${config.account?.autoSwitchOnError ? '启用' : '禁用'}</div>`;
-      html += '</div>';
+    html += '<span class="hot-reload-toggle-icon">▼</span>';
+    html += '</div></div>';
+    
+    // 主体区域（可折叠）
+    html += '<div class="hot-reload-body collapsed">';
+    
+    // 监听文件列表
+    if (hotReloadStatus.configs && hotReloadStatus.configs.length > 0) {
+      html += '<div class="hot-reload-files-section">';
+      html += '<div class="hot-reload-files-label">监听文件</div>';
+      html += '<div class="hot-reload-files-grid">';
+      hotReloadStatus.configs.forEach(key => {
+        const filename = hotReloadStatus.files[key];
+        html += `<div class="file-tag" onclick="reloadConfig('${key}')" title="点击重载 ${filename}">`;
+        html += `<span class="file-tag-icon">📄</span>`;
+        html += `<span>${filename}</span>`;
+        html += '</div>';
+      });
+      html += '</div></div>';
     }
+    
+    // 操作按钮
+    html += '<div class="hot-reload-actions">';
+    html += `<button class="hot-reload-btn ${hotReloadStatus.watching ? 'hot-reload-btn-danger' : 'hot-reload-btn-success'}" onclick="toggleHotReload(${hotReloadStatus.watching})">`;
+    html += `<span class="hot-reload-btn-icon">${hotReloadStatus.watching ? '⏹' : '▶'}</span>`;
+    html += `<span>${hotReloadStatus.watching ? '停止监听' : '启动监听'}</span></button>`;
+    html += '</div>';
+    
+    html += '</div></div>';
 
-    html += '<div class="config-item">';
-    html += '<label>流式响应块大小</label>';
-    html += `<div class="value">${config.stream?.chunkSize || 4} 字符</div>`;
+    // 配置编辑表单
+    html += '<div class="config-editor">';
+    html += '<div class="config-header">';
+    html += '<h3>服务器配置</h3>';
+    html += '<div class="config-actions">';
+    html += '<button class="btn btn-primary" onclick="saveServerConfig()">💾 保存配置</button>';
+    html += '</div></div>';
+
+    // 服务器设置
+    html += '<div class="config-section">';
+    html += '<h4>🖥️ 服务器设置 <span class="restart-hint">⚠️ 修改后需重启服务器</span></h4>';
+    html += '<div class="config-grid">';
+    html += createInput('server.host', '监听地址', config.server?.host || '0.0.0.0', 'text', '服务器监听的 IP 地址（修改后需重启）');
+    html += createInput('server.port', '端口', config.server?.port || 3000, 'number', '服务器监听的端口号（修改后需重启）');
+    html += '</div></div>';
+
+    // 流式响应设置
+    html += '<div class="config-section">';
+    html += '<h4>📡 流式响应</h4>';
+    html += '<div class="config-grid">';
+    html += createInput('stream.chunkSize', '块大小', config.stream?.chunkSize || 4, 'number', '流式响应每次发送的字符数');
+    html += '</div></div>';
+
+    // 账号设置
+    const isMultiAccount = config.account?.multiAccountEnabled || false;
+    html += '<div class="config-section">';
+    html += '<h4>👥 账号设置 <span class="restart-hint">⚠️ 切换账号模式需重启</span></h4>';
+    
+    // 账号模式切换开关
+    html += '<div class="account-mode-switch">';
+    html += createCheckbox('account.multiAccountEnabled', '启用多账号模式', isMultiAccount);
+    html += '</div>';
+    
+    // 认证配置状态（根据模式显示对应卡片）
+    html += '<div id="authConfigStatus" class="auth-config-status">加载中...</div>';
+    
+    // 多账号专属设置（仅在多账号模式下显示）
+    html += `<div id="multiAccountOptions" class="multi-account-options" style="display: ${isMultiAccount ? 'block' : 'none'}">`;
+    html += '<div class="config-grid">';
+    html += createSelect('account.strategy', '账号选择策略', config.account?.strategy || 'auto', [
+      { value: 'auto', label: '自动选择 (auto)' },
+      { value: 'round-robin', label: '轮询 (round-robin)' },
+      { value: 'least-used', label: '最少使用 (least-used)' }
+    ]);
+    html += createCheckbox('account.autoSwitchOnError', '错误时自动切换账号', config.account?.autoSwitchOnError !== false);
+    html += '</div></div>';
+    
     html += '</div>';
 
-    html += '<div class="config-item">';
-    html += '<label>Token 刷新配置</label>';
-    html += `<div class="value">最大重试: ${config.token?.refreshRetryMax || 3}次<br>`;
-    html += `重试间隔: ${(config.token?.refreshRetryIntervalMs || 60000) / 1000}秒<br>`;
-    html += `提前刷新: ${config.token?.refreshBufferMinutes || 5}分钟</div>`;
+    // Token 刷新设置
+    html += '<div class="config-section">';
+    html += '<h4>🔑 Token 刷新</h4>';
+    html += '<div class="config-grid">';
+    html += createInput('token.refreshRetryMax', '最大重试次数', config.token?.refreshRetryMax || 3, 'number', '刷新失败时的最大重试次数');
+    html += createInput('token.refreshRetryIntervalMs', '重试间隔 (ms)', config.token?.refreshRetryIntervalMs || 60000, 'number', '重试之间的等待时间');
+    html += createInput('token.refreshBufferMinutes', '提前刷新 (分钟)', config.token?.refreshBufferMinutes || 5, 'number', '在过期前多少分钟开始刷新');
+    html += '</div></div>';
+
+    // 连接池设置
+    html += '<div class="config-section">';
+    html += '<h4>🔗 连接池</h4>';
+    html += '<div class="config-grid">';
+    html += createInput('connectionPool.maxSockets', '最大连接数', config.connectionPool?.maxSockets || 20, 'number', '连接池最大连接数');
+    html += createInput('connectionPool.maxFreeSockets', '空闲连接数', config.connectionPool?.maxFreeSockets || 10, 'number', '保持的空闲连接数');
+    html += createInput('connectionPool.socketTimeout', '连接超时 (ms)', config.connectionPool?.socketTimeout || 60000, 'number', '连接超时时间');
+    html += createInput('connectionPool.requestTimeout', '请求超时 (ms)', config.connectionPool?.requestTimeout || 30000, 'number', '请求超时时间');
+    html += '</div></div>';
+
+    // 日志设置
+    html += '<div class="config-section">';
+    html += '<h4>📝 日志设置</h4>';
+    html += '<div class="config-grid">';
+    html += createSelect('logging.level', '日志级别', config.logging?.level || 'INFO', [
+      { value: 'DEBUG', label: 'DEBUG - 调试' },
+      { value: 'INFO', label: 'INFO - 信息' },
+      { value: 'WARN', label: 'WARN - 警告' },
+      { value: 'ERROR', label: 'ERROR - 错误' }
+    ]);
+    html += createInput('logging.rotation.maxSize', '轮转大小 (字节)', config.logging?.rotation?.maxSize || 10485760, 'number', '单个日志文件最大大小');
+    html += createInput('logging.rotation.maxFiles', '保留文件数', config.logging?.rotation?.maxFiles || 5, 'number', '保留的历史日志文件数量');
+    html += '</div></div>';
+
     html += '</div>';
 
-    html += '<div class="config-item">';
-    html += '<label>连接池配置</label>';
-    html += `<div class="value">最大连接数: ${config.connectionPool?.maxSockets || 20}<br>`;
-    html += `空闲连接数: ${config.connectionPool?.maxFreeSockets || 10}<br>`;
-    html += `连接超时: ${(config.connectionPool?.socketTimeout || 60000) / 1000}秒<br>`;
-    html += `请求超时: ${(config.connectionPool?.requestTimeout || 30000) / 1000}秒</div>`;
+    container.innerHTML = html;
+    
+    // 延迟加载认证配置状态（等待 DOM 渲染）
+    setTimeout(loadAuthConfigStatus, 100);
+  } catch (error) {
+    container.innerHTML = `<div class="error-message">加载失败: ${error.message}</div>`;
+  }
+}
+
+// 加载认证配置状态
+async function loadAuthConfigStatus() {
+  const container = document.getElementById('authConfigStatus');
+  if (!container) return;
+  
+  try {
+    const response = await fetch('/api/auth-config/status');
+    const status = await response.json();
+    
+    // 获取当前多账号模式的选中状态
+    const multiAccountCheckbox = document.getElementById('cfg-account.multiAccountEnabled');
+    const isMultiAccountMode = multiAccountCheckbox ? multiAccountCheckbox.checked : (currentConfig?.account?.multiAccountEnabled || false);
+    
+    let html = '';
+    
+    if (isMultiAccountMode) {
+      // 多账号模式：显示多账号配置卡片
+      html += '<div class="auth-config-card-single">';
+      html += '<div class="auth-config-header">';
+      html += '<span class="auth-config-title">� 多账号配置</span>';
+      html += `<span class="auth-config-badge ${status.multiAccount.valid ? 'badge-active' : 'badge-error'}">`;
+      html += status.multiAccount.valid ? '✓ 已配置' : '✗ 未配置';
+      html += '</span></div>';
+      
+      if (status.multiAccount.valid) {
+        html += `<div class="auth-config-info">`;
+        html += `<span>总账号数: ${status.multiAccount.count}</span>`;
+        html += `<span class="auth-config-separator">|</span>`;
+        html += `<span>活跃账号: ${status.multiAccount.activeCount}</span>`;
+        html += '</div>';
+      } else {
+        html += '<div class="auth-config-info auth-config-warning">';
+        html += '<span>⚠️ 需要配置 kiro-accounts.json 文件</span>';
+        html += '</div>';
+      }
+      
+      html += '<div class="auth-config-actions">';
+      html += '<button class="btn btn-small" onclick="showUploadMultiDialog()">📁 上传配置</button>';
+      html += '</div></div>';
+    } else {
+      // 单账号模式：显示单账号配置卡片
+      html += '<div class="auth-config-card-single">';
+      html += '<div class="auth-config-header">';
+      html += '<span class="auth-config-title">� 单账号配置</span>';
+      html += `<span class="auth-config-badge ${status.singleAccount.valid ? 'badge-active' : 'badge-error'}">`;
+      html += status.singleAccount.valid ? '✓ 已配置' : '✗ 未配置';
+      html += '</span></div>';
+      
+      if (status.singleAccount.valid && status.singleAccount.info) {
+        html += `<div class="auth-config-info">`;
+        html += `<span>认证方式: ${status.singleAccount.info.provider}</span>`;
+        if (status.singleAccount.info.expiresAt) {
+          const expDate = new Date(status.singleAccount.info.expiresAt);
+          html += `<span class="auth-config-separator">|</span>`;
+          html += `<span>过期时间: ${expDate.toLocaleString('zh-CN')}</span>`;
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="auth-config-info auth-config-warning">';
+        html += '<span>⚠️ 需要配置 kiro-auth-token.json 文件</span>';
+        html += '</div>';
+      }
+      
+      html += '<div class="auth-config-actions">';
+      html += '<button class="btn btn-small" onclick="showUploadSingleDialog()">📁 上传配置</button>';
+      html += '</div></div>';
+    }
+    
+    container.innerHTML = html;
+  } catch (error) {
+    container.innerHTML = `<div class="error-message">加载认证状态失败: ${error.message}</div>`;
+  }
+}
+
+// 处理多账号模式切换
+function onMultiAccountModeChange(checkbox) {
+  const isMultiAccount = checkbox.checked;
+  const multiAccountOptions = document.getElementById('multiAccountOptions');
+  
+  // 显示/隐藏多账号专属选项
+  if (multiAccountOptions) {
+    multiAccountOptions.style.display = isMultiAccount ? 'block' : 'none';
+  }
+  
+  // 刷新认证配置卡片
+  loadAuthConfigStatus();
+}
+
+// 显示上传单账号配置对话框
+function showUploadSingleDialog() {
+  showUploadDialog('single', '上传单账号配置', 'kiro-auth-token.json');
+}
+
+// 显示上传多账号配置对话框
+function showUploadMultiDialog() {
+  showUploadDialog('multi', '上传多账号配置', 'kiro-accounts.json');
+}
+
+// 通用上传对话框
+function showUploadDialog(type, title, filename) {
+  const existing = document.querySelector('.upload-dialog-overlay');
+  if (existing) existing.remove();
+  
+  const overlay = document.createElement('div');
+  overlay.className = 'upload-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="upload-dialog">
+      <div class="upload-dialog-header">
+        <h3>${title}</h3>
+        <button class="btn-close" onclick="closeUploadDialog()">✕</button>
+      </div>
+      <div class="upload-dialog-body">
+        <p>上传 <code>${filename}</code> 文件或粘贴 JSON 内容：</p>
+        <div class="upload-methods">
+          <input type="file" id="uploadFile" accept=".json" onchange="handleFileSelect(this)" style="display:none" />
+          <button class="btn" onclick="document.getElementById('uploadFile').click()">📁 选择文件</button>
+          <span class="upload-or">或粘贴 JSON</span>
+        </div>
+        <textarea id="uploadJson" placeholder="粘贴 JSON 内容..."></textarea>
+      </div>
+      <div class="upload-dialog-footer">
+        <button class="btn" onclick="closeUploadDialog()">取消</button>
+        <button class="btn btn-primary" onclick="submitUpload('${type}')">上传</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+// 关闭上传对话框
+function closeUploadDialog() {
+  const overlay = document.querySelector('.upload-dialog-overlay');
+  if (overlay) overlay.remove();
+}
+
+// 处理文件选择
+function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    document.getElementById('uploadJson').value = e.target.result;
+  };
+  reader.readAsText(file);
+}
+
+// 提交上传
+async function submitUpload(type) {
+  const jsonText = document.getElementById('uploadJson').value.trim();
+  
+  if (!jsonText) {
+    showNotification('请选择文件或粘贴 JSON 内容', 'error');
+    return;
+  }
+  
+  let data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch (e) {
+    showNotification(`JSON 格式错误: ${e.message}`, 'error');
+    return;
+  }
+  
+  try {
+    const endpoint = type === 'single' ? '/api/auth-config/single' : '/api/auth-config/multi';
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      showNotification(result.message, 'success');
+      closeUploadDialog();
+      loadAuthConfigStatus();
+    } else {
+      showNotification(`上传失败: ${result.error}`, 'error');
+    }
+  } catch (error) {
+    showNotification(`上传失败: ${error.message}`, 'error');
+  }
+}
+
+// 创建输入框
+function createInput(path, label, value, type, hint) {
+  return `
+    <div class="config-field">
+      <label for="cfg-${path}">${label}</label>
+      <input type="${type}" id="cfg-${path}" data-path="${path}" value="${value}" />
+      ${hint ? `<span class="field-hint">${hint}</span>` : ''}
+    </div>
+  `;
+}
+
+// 创建复选框
+function createCheckbox(path, label, checked) {
+  // 为多账号模式复选框添加 onchange 事件
+  const onchangeAttr = path === 'account.multiAccountEnabled' ? 'onchange="onMultiAccountModeChange(this)"' : '';
+  return `
+    <div class="config-field checkbox-field">
+      <label class="checkbox-label">
+        <input type="checkbox" id="cfg-${path}" data-path="${path}" ${checked ? 'checked' : ''} ${onchangeAttr} />
+        <span class="checkbox-text">${label}</span>
+      </label>
+    </div>
+  `;
+}
+
+// 创建下拉框
+function createSelect(path, label, value, options) {
+  const optionsHtml = options.map(opt => 
+    `<option value="${opt.value}" ${opt.value === value ? 'selected' : ''}>${opt.label}</option>`
+  ).join('');
+  return `
+    <div class="config-field">
+      <label for="cfg-${path}">${label}</label>
+      <select id="cfg-${path}" data-path="${path}">${optionsHtml}</select>
+    </div>
+  `;
+}
+
+// 从表单收集配置
+function collectConfigFromForm() {
+  const config = JSON.parse(JSON.stringify(currentConfig || {}));
+  
+  document.querySelectorAll('[data-path]').forEach(el => {
+    const path = el.dataset.path;
+    const parts = path.split('.');
+    let obj = config;
+    
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!obj[parts[i]]) obj[parts[i]] = {};
+      obj = obj[parts[i]];
+    }
+    
+    const key = parts[parts.length - 1];
+    if (el.type === 'checkbox') {
+      obj[key] = el.checked;
+    } else if (el.type === 'number') {
+      obj[key] = parseInt(el.value, 10) || 0;
+    } else {
+      obj[key] = el.value;
+    }
+  });
+  
+  return config;
+}
+
+// 保存服务器配置
+async function saveServerConfig() {
+  try {
+    const config = collectConfigFromForm();
+    
+    const response = await fetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      currentConfig = config;
+      
+      if (result.needsRestart) {
+        // 显示重启确认对话框
+        showRestartDialog();
+      } else {
+        showNotification('配置已保存并生效', 'success');
+      }
+    } else {
+      showNotification(`保存失败: ${result.error}`, 'error');
+    }
+  } catch (error) {
+    showNotification(`保存失败: ${error.message}`, 'error');
+  }
+}
+
+// 显示重启确认对话框
+function showRestartDialog() {
+  const existing = document.querySelector('.restart-dialog-overlay');
+  if (existing) existing.remove();
+  
+  const overlay = document.createElement('div');
+  overlay.className = 'restart-dialog-overlay';
+  overlay.innerHTML = `
+    <div class="restart-dialog">
+      <div class="restart-dialog-icon">⚠️</div>
+      <h3>需要重启服务器</h3>
+      <p>您修改了以下配置，需要重启服务器才能生效：</p>
+      <ul>
+        <li>服务器地址/端口</li>
+        <li>账号模式切换</li>
+      </ul>
+      <div class="restart-dialog-actions">
+        <button class="btn" onclick="closeRestartDialog()">稍后重启</button>
+        <button class="btn btn-danger" onclick="restartServer()">立即重启</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+// 关闭重启对话框
+function closeRestartDialog() {
+  const overlay = document.querySelector('.restart-dialog-overlay');
+  if (overlay) overlay.remove();
+  showNotification('配置已保存，请手动重启服务器', 'info');
+}
+
+// 重启服务器
+async function restartServer() {
+  const overlay = document.querySelector('.restart-dialog-overlay');
+  if (overlay) {
+    overlay.querySelector('.restart-dialog').innerHTML = `
+      <div class="restart-dialog-icon">🔄</div>
+      <h3>正在重启...</h3>
+      <p>服务器正在重启，页面将自动刷新</p>
+    `;
+  }
+  
+  try {
+    await fetch('/api/server/restart', { method: 'POST' });
+  } catch (e) {
+    // 请求可能因服务器关闭而失败，这是正常的
+  }
+  
+  // 等待服务器重启后刷新页面
+  setTimeout(() => {
+    waitForServerAndReload();
+  }, 2000);
+}
+
+// 等待服务器恢复并刷新
+async function waitForServerAndReload() {
+  const maxAttempts = 30;
+  let attempts = 0;
+  
+  const check = async () => {
+    attempts++;
+    try {
+      const response = await fetch('/api/health');
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+    } catch (e) {
+      // 服务器还没恢复
+    }
+    
+    if (attempts < maxAttempts) {
+      setTimeout(check, 1000);
+    } else {
+      showNotification('服务器重启超时，请手动刷新页面', 'error');
+      closeRestartDialog();
+    }
+  };
+  
+  check();
+}
+
+// 重载配置
+async function reloadConfig(configKey = null) {
+  try {
+    const response = await fetch('/api/config/hot-reload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configKey })
+    });
+    const result = await response.json();
+    
+    if (result.success) {
+      showNotification(result.message, 'success');
+      loadConfig();
+    } else {
+      showNotification(`重载失败: ${result.error}`, 'error');
+    }
+  } catch (error) {
+    showNotification(`重载失败: ${error.message}`, 'error');
+  }
+}
+
+// 切换热重载监听状态
+async function toggleHotReload(currentlyWatching) {
+  try {
+    const action = currentlyWatching ? 'stop' : 'start';
+    const response = await fetch(`/api/config/hot-reload/${action}`, { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.success) {
+      showNotification(result.message, 'success');
+      loadConfig();
+    } else {
+      showNotification(`操作失败: ${result.error}`, 'error');
+    }
+  } catch (error) {
+    showNotification(`操作失败: ${error.message}`, 'error');
+  }
+}
+
+// ============================================
+// 加载模型映射
+// ============================================
+let currentModelsConfig = null;
+
+async function loadModels() {
+  const container = document.getElementById('modelsContent');
+  container.innerHTML = '<div class="loading">加载中...</div>';
+
+  try {
+    const response = await fetch('/api/models');
+    const data = await response.json();
+    currentModelsConfig = data;
+
+    let html = '<div class="config-editor">';
+    html += '<div class="config-header">';
+    html += '<h3>模型映射配置</h3>';
+    html += '<div class="config-actions">';
+    html += '<button class="btn btn-success" onclick="addModelMapping()">➕ 添加映射</button>';
+    html += '<button class="btn btn-primary" onclick="saveModelsConfig()">💾 保存配置</button>';
+    html += '</div></div>';
+
+    // 默认模型
+    html += '<div class="config-section">';
+    html += '<h4>🎯 默认模型</h4>';
+    html += '<div class="config-grid">';
+    html += createSelect('models.defaultModel', '默认模型', data.defaultModel || 'claude-sonnet-4.5', [
+      { value: 'claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
+      { value: 'claude-haiku-4.5', label: 'Claude Haiku 4.5' },
+      { value: 'claude-opus-4.5', label: 'Claude Opus 4.5' }
+    ]);
+    html += '</div></div>';
+
+    // 模型映射表
+    html += '<div class="config-section">';
+    html += '<h4>🔄 模型映射表</h4>';
+    html += '<p class="section-desc">将 Claude API 请求的模型 ID 映射到 Kiro API 的模型 ID</p>';
+    html += '<div id="modelMappingsContainer">';
+    
+    const mappings = data.mappings || {};
+    Object.entries(mappings).forEach(([claudeModel, kiroModel], index) => {
+      html += createMappingRow(index, claudeModel, kiroModel);
+    });
+    
+    html += '</div></div>';
     html += '</div>';
 
     container.innerHTML = html;
@@ -559,37 +1283,76 @@ async function loadConfig() {
   }
 }
 
-// ============================================
-// 加载模型映射
-// ============================================
-async function loadModels() {
-  const container = document.getElementById('modelsContent');
-  container.innerHTML = '<div class="loading">加载中...</div>';
+// 创建映射行
+function createMappingRow(index, claudeModel, kiroModel) {
+  return `
+    <div class="mapping-row" data-index="${index}">
+      <input type="text" class="mapping-input claude-model" placeholder="Claude 模型 ID" value="${claudeModel}" />
+      <span class="mapping-arrow">→</span>
+      <select class="mapping-input kiro-model">
+        <option value="claude-sonnet-4.5" ${kiroModel === 'claude-sonnet-4.5' ? 'selected' : ''}>claude-sonnet-4.5</option>
+        <option value="claude-haiku-4.5" ${kiroModel === 'claude-haiku-4.5' ? 'selected' : ''}>claude-haiku-4.5</option>
+        <option value="claude-opus-4.5" ${kiroModel === 'claude-opus-4.5' ? 'selected' : ''}>claude-opus-4.5</option>
+      </select>
+      <button class="btn-icon btn-delete" onclick="removeMapping(this)" title="删除">🗑️</button>
+    </div>
+  `;
+}
 
-  try {
-    const response = await fetch('/api/models');
-    const data = await response.json();
+// 添加模型映射
+function addModelMapping() {
+  const container = document.getElementById('modelMappingsContainer');
+  const index = container.querySelectorAll('.mapping-row').length;
+  const html = createMappingRow(index, '', 'claude-sonnet-4.5');
+  container.insertAdjacentHTML('beforeend', html);
+}
 
-    let html = '<h3 style="margin-bottom: 20px; color: #374151;">模型映射表</h3>';
+// 删除映射
+function removeMapping(btn) {
+  btn.closest('.mapping-row').remove();
+}
 
-    html += '<div class="config-item">';
-    html += '<label>默认模型</label>';
-    html += `<div class="value">${data.defaultModel || 'claude-sonnet-4.5'}</div>`;
-    html += '</div>';
-
-    html += '<table>';
-    html += '<thead><tr><th>Claude 模型 ID</th><th>Kiro 模型 ID</th></tr></thead>';
-    html += '<tbody>';
-
-    for (const [claudeModel, kiroModel] of Object.entries(data.mappings || {})) {
-      html += `<tr><td>${claudeModel}</td><td>${kiroModel}</td></tr>`;
+// 收集模型配置
+function collectModelsConfig() {
+  const config = {
+    defaultModel: document.getElementById('cfg-models.defaultModel')?.value || 'claude-sonnet-4.5',
+    mappings: {},
+    description: currentModelsConfig?.description || 'Claude API 模型 ID 到 Kiro API 模型 ID 的映射配置',
+    notes: currentModelsConfig?.notes || {}
+  };
+  
+  document.querySelectorAll('.mapping-row').forEach(row => {
+    const claudeModel = row.querySelector('.claude-model').value.trim();
+    const kiroModel = row.querySelector('.kiro-model').value;
+    if (claudeModel) {
+      config.mappings[claudeModel] = kiroModel;
     }
+  });
+  
+  return config;
+}
 
-    html += '</tbody></table>';
-
-    container.innerHTML = html;
+// 保存模型配置
+async function saveModelsConfig() {
+  try {
+    const config = collectModelsConfig();
+    
+    const response = await fetch('/api/models', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    
+    const result = await response.json();
+    
+    if (result.success) {
+      showNotification('模型映射已保存并生效', 'success');
+      currentModelsConfig = config;
+    } else {
+      showNotification(`保存失败: ${result.error}`, 'error');
+    }
   } catch (error) {
-    container.innerHTML = `<div class="error-message">加载失败: ${error.message}</div>`;
+    showNotification(`保存失败: ${error.message}`, 'error');
   }
 }
 
@@ -622,8 +1385,8 @@ async function loadLog() {
 // 初始化
 // ============================================
 async function init() {
-  // 初始化账号管理区域
-  initAccountsSection();
+  // 初始化账号管理区域（异步）
+  await initAccountsSection();
 
   await checkServerStatus();
   loadAccounts();
