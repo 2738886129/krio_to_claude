@@ -148,20 +148,7 @@ async function testAccount(accountId, event) {
   }
 }
 
-// 切换热重载面板折叠状态
-function toggleHotReloadPanel() {
-  const body = document.querySelector('.hot-reload-body');
-  const icon = document.querySelector('.hot-reload-toggle-icon');
-  const panel = document.querySelector('.hot-reload-panel');
-  
-  if (body.classList.contains('collapsed')) {
-    body.classList.remove('collapsed');
-    panel.classList.add('expanded');
-  } else {
-    body.classList.add('collapsed');
-    panel.classList.remove('expanded');
-  }
-}
+
 
 // ============================================
 // 切换标签页
@@ -743,62 +730,12 @@ async function loadConfig() {
   container.innerHTML = '<div class="loading">加载中...</div>';
 
   try {
-    const [configResponse, hotReloadResponse] = await Promise.all([
-      fetch('/api/config'),
-      fetch('/api/config/hot-reload/status')
-    ]);
+    const configResponse = await fetch('/api/config');
     
     const config = await configResponse.json();
     currentConfig = config;
-    const hotReloadStatus = await hotReloadResponse.json();
 
     let html = '';
-    
-    // 热重载控制面板 - 现代化设计（可折叠）
-    html += '<div class="hot-reload-panel">';
-    
-    // 头部区域（可点击折叠）
-    html += '<div class="hot-reload-header" onclick="toggleHotReloadPanel()">';
-    html += '<div class="hot-reload-title-group">';
-    html += '<div class="hot-reload-icon">🔄</div>';
-    html += '<div>';
-    html += '<h3 class="hot-reload-title">配置热重载</h3>';
-    html += '<div class="hot-reload-subtitle">实时监控配置文件变更</div>';
-    html += '</div></div>';
-    html += '<div class="hot-reload-header-right">';
-    html += `<div class="hot-reload-status-badge ${hotReloadStatus.watching ? 'online' : 'offline'}">`;
-    html += '<span class="status-dot"></span>';
-    html += `<span>${hotReloadStatus.watching ? '监听中' : '已停止'}</span>`;
-    html += '</div>';
-    html += '<span class="hot-reload-toggle-icon">▼</span>';
-    html += '</div></div>';
-    
-    // 主体区域（可折叠）
-    html += '<div class="hot-reload-body collapsed">';
-    
-    // 监听文件列表
-    if (hotReloadStatus.configs && hotReloadStatus.configs.length > 0) {
-      html += '<div class="hot-reload-files-section">';
-      html += '<div class="hot-reload-files-label">监听文件</div>';
-      html += '<div class="hot-reload-files-grid">';
-      hotReloadStatus.configs.forEach(key => {
-        const filename = hotReloadStatus.files[key];
-        html += `<div class="file-tag" onclick="reloadConfig('${key}')" title="点击重载 ${filename}">`;
-        html += `<span class="file-tag-icon">📄</span>`;
-        html += `<span>${filename}</span>`;
-        html += '</div>';
-      });
-      html += '</div></div>';
-    }
-    
-    // 操作按钮
-    html += '<div class="hot-reload-actions">';
-    html += `<button class="hot-reload-btn ${hotReloadStatus.watching ? 'hot-reload-btn-danger' : 'hot-reload-btn-success'}" onclick="toggleHotReload(${hotReloadStatus.watching})">`;
-    html += `<span class="hot-reload-btn-icon">${hotReloadStatus.watching ? '⏹' : '▶'}</span>`;
-    html += `<span>${hotReloadStatus.watching ? '停止监听' : '启动监听'}</span></button>`;
-    html += '</div>';
-    
-    html += '</div></div>';
 
     // 配置编辑表单
     html += '<div class="config-editor">';
@@ -1257,44 +1194,7 @@ async function waitForServerAndReload() {
   check();
 }
 
-// 重载配置
-async function reloadConfig(configKey = null) {
-  try {
-    const response = await fetch('/api/config/hot-reload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ configKey })
-    });
-    const result = await response.json();
-    
-    if (result.success) {
-      showNotification(result.message, 'success');
-      loadConfig();
-    } else {
-      showNotification(`重载失败: ${result.error}`, 'error');
-    }
-  } catch (error) {
-    showNotification(`重载失败: ${error.message}`, 'error');
-  }
-}
 
-// 切换热重载监听状态
-async function toggleHotReload(currentlyWatching) {
-  try {
-    const action = currentlyWatching ? 'stop' : 'start';
-    const response = await fetch(`/api/config/hot-reload/${action}`, { method: 'POST' });
-    const result = await response.json();
-    
-    if (result.success) {
-      showNotification(result.message, 'success');
-      loadConfig();
-    } else {
-      showNotification(`操作失败: ${result.error}`, 'error');
-    }
-  } catch (error) {
-    showNotification(`操作失败: ${error.message}`, 'error');
-  }
-}
 
 // ============================================
 // 加载模型映射
