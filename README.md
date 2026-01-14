@@ -119,18 +119,18 @@ node src/claude-api-server.js
 {
   "port": 3000,
   "host": "0.0.0.0",
-  "accountMode": "multi",        // "single" 或 "multi"
-  "strategy": "auto",            // 账号选择策略
-  "autoSwitchOnError": true,     // 错误时自动切换
+  "accountMode": "multi", // "single" 或 "multi"
+  "strategy": "auto", // 账号选择策略
+  "autoSwitchOnError": true, // 错误时自动切换
   "connectionPool": {
-    "maxSockets": 10,            // 最大并发连接数
-    "maxFreeSockets": 5,         // 空闲连接池大小
-    "socketTimeout": 60000,      // Socket 超时（毫秒）
-    "requestTimeout": 120000     // 请求超时（毫秒）
+    "maxSockets": 10, // 最大并发连接数
+    "maxFreeSockets": 5, // 空闲连接池大小
+    "socketTimeout": 60000, // Socket 超时（毫秒）
+    "requestTimeout": 120000 // 请求超时（毫秒）
   },
   "tokenRefresh": {
-    "bufferSeconds": 300,        // 刷新令牌提前时间
-    "retryAttempts": 3           // 重试次数
+    "bufferSeconds": 300, // 刷新令牌提前时间
+    "retryAttempts": 3 // 重试次数
   }
 }
 ```
@@ -147,12 +147,12 @@ node src/claude-api-server.js
 
 ## 📊 账号选择策略
 
-| 策略 | 说明 |
-|------|------|
-| `auto` | 自动选择最优账号（默认） |
-| `round-robin` | 轮询选择 |
-| `priority` | 按优先级选择 |
-| `least-used` | 选择使用最少的账号 |
+| 策略          | 说明                     |
+| ------------- | ------------------------ |
+| `auto`        | 自动选择最优账号（默认） |
+| `round-robin` | 轮询选择                 |
+| `priority`    | 按优先级选择             |
+| `least-used`  | 选择使用最少的账号       |
 
 ## 🖥️ Web 管理界面
 
@@ -169,12 +169,12 @@ node src/claude-api-server.js
 ### 基础对话
 
 ```javascript
-const KiroClient = require('./src/KiroClient');
+const KiroClient = require("./src/KiroClient");
 
-const client = new KiroClient('your_access_token');
+const client = new KiroClient("your_access_token");
 
 async function chat() {
-  const response = await client.chat('你好，请介绍一下自己');
+  const response = await client.chat("你好，请介绍一下自己");
   console.log(response);
 }
 
@@ -186,21 +186,21 @@ chat();
 ```javascript
 async function listModels() {
   const models = await client.getAvailableModelIds();
-  console.log('可用模型:', models);
+  console.log("可用模型:", models);
 }
 ```
 
 ## 📝 API 端点
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/health` | GET | 健康检查 |
-| `/api/accounts` | GET | 获取账号列表 |
-| `/api/accounts/:id/test` | POST | 测试账号 |
-| `/api/accounts/:id/refresh` | POST | 刷新账号 Token |
-| `/api/config` | GET/PUT | 获取/修改配置 |
-| `/api/models` | GET/PUT | 获取/修改模型映射 |
-| `/api/logs` | GET | 获取日志 |
+| 端点                        | 方法    | 说明              |
+| --------------------------- | ------- | ----------------- |
+| `/api/health`               | GET     | 健康检查          |
+| `/api/accounts`             | GET     | 获取账号列表      |
+| `/api/accounts/:id/test`    | POST    | 测试账号          |
+| `/api/accounts/:id/refresh` | POST    | 刷新账号 Token    |
+| `/api/config`               | GET/PUT | 获取/修改配置     |
+| `/api/models`               | GET/PUT | 获取/修改模型映射 |
+| `/api/logs`                 | GET     | 获取日志          |
 
 ## 🔒 安全建议
 
@@ -228,6 +228,11 @@ async function listModels() {
 - 调整 `connectionPool` 配置中的超时时间
 - 检查网络连接状态
 - 确认 Kiro API 服务是否正常
+
+### 参考项目
+
+- AIClient-2-API(https://github.com/justlovemaki/AIClient-2-API)
+- cc-switch(https://github.com/farion1231/cc-switch)
 
 ## 📄 许可证
 
