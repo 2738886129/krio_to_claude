@@ -9,7 +9,10 @@ A Node.js proxy server that provides a Claude API-compatible endpoint backed by 
 ## Commands
 
 ```bash
-# Start the API server (includes web admin on port 3000)
+# Quick start (Windows - handles all setup automatically)
+start.bat
+
+# Start the API server (includes web admin on default port 3000)
 npm run server
 
 # Run example/test client
@@ -27,6 +30,12 @@ node src/manage-models.js list           # Query Kiro API for available models
 node src/manage-models.js add <claude> <kiro>  # Add mapping
 node src/manage-models.js remove <claude>      # Remove mapping
 node src/manage-models.js test <claude>        # Test mapping resolution
+
+# Frontend development (from public/ directory)
+cd public
+npm run dev      # Start Vite dev server with hot reload
+npm run build    # Build frontend for production (creates dist/)
+npm run preview  # Preview production build locally
 ```
 
 ## Architecture
@@ -46,6 +55,17 @@ node src/manage-models.js test <claude>        # Test mapping resolution
 - [logger.js](src/logger.js) - Centralized logging to `logs/` directory with log rotation, level filtering, and separate streams for server, Claude API, and Kiro API events.
 
 - [manage-models.js](src/manage-models.js) - CLI tool for managing Claude-to-Kiro model ID mappings.
+
+**Frontend Components** (Vue 3 in `public/src/components/`):
+- `App.vue` - Main application container
+- `AccountManager.vue` / `MultiAccountView.vue` / `AccountCard.vue` - Account management UI
+- `ServerConfig.vue` - Server configuration viewer
+- `ModelMapping.vue` - Model mapping editor
+- `LogViewer.vue` - Log file viewer with auto-refresh
+- `StatusBar.vue` - System status display
+- Additional dialogs: `AddAccountDialog.vue`, `UploadDialog.vue`, `RestartDialog.vue`
+
+Build process: Vite bundles Vue 3 SFC components from `public/src/` → `public/dist/`, served as static files by Express
 
 ### Data Flow
 
@@ -68,7 +88,7 @@ The server uses `config/kiro-accounts.json` with array of accounts:
 - Auto-selects best account using configured strategy (`auto`, `random`, or `first`)
 - Automatic failover: when quota errors or auth failures detected via `shouldSwitchAccount()`, marks account as `error` status and switches to next available account
 - Tracks usage quotas (`percentUsed`) for intelligent selection
-- Auto-refreshes tokens before expiry based on `expiresAt`
+- Auto-refreshes tokens before expiry based on `expiresAt` via Kiro auth endpoint (`prod.us-east-1.auth.desktop.kiro.dev/refreshToken`)
 
 ### Configuration Files (config/)
 
@@ -78,15 +98,16 @@ The server uses `config/kiro-accounts.json` with array of accounts:
 
 ### Web Management Interface
 
-Server root (`http://localhost:3000`) serves web admin UI from `public/`:
+Server root (`http://localhost:3000`) serves web admin UI from `public/dist/`:
+- **Frontend Stack**: Vue 3 + Vite (source in `public/src/`, built to `public/dist/`)
 - **Dashboard**: Server status, active accounts, quota usage, connection pool metrics
 - **Account Management**: View all accounts, test connectivity, refresh tokens, see status/errors
-- **Server Config**: Edit and apply config changes with validation (some require restart)
+- **Server Config**: View-only display of current configuration (edit via config files)
 - **Model Mappings**: View and modify Claude-to-Kiro model mappings
 - **Log Viewer**: Real-time display of server logs (auto-refreshing)
 
 API endpoints in [web-admin.js](src/web-admin.js):
-- `GET/PUT /api/config` - Server configuration
+- `GET /api/config` - Server configuration (read-only)
 - `GET /api/accounts` - List accounts with status/usage
 - `POST /api/accounts/:id/test` - Test account with sample request
 - `POST /api/accounts/:id/reset` - Refresh token + connectivity test
@@ -96,14 +117,16 @@ API endpoints in [web-admin.js](src/web-admin.js):
 
 ### Configuration Hot-Reloading
 
-[configWatcher.js](src/configWatcher.js) monitors config files and emits `configChanged` events:
-- Uses `fs.watch()` with 500ms debouncing to avoid duplicate triggers
-- Tracks file `mtimeMs` to detect actual changes
+[configWatcher.js](src/configWatcher.js) provides manual configuration reload functionality:
+- **Manual reload only**: Automatic file watching is disabled by default to avoid duplicate reloads
+- Triggered via API endpoint: `POST /api/config/hot-reload` or programmatically via `configWatcher.reload()`
 - Deep-merges with defaults on reload
 - Emits detailed change events (added/removed/modified paths)
-- Server listens for events and reloads without restart (except host/port changes)
+- Server listens for `configChanged` events and reloads without restart (except host/port changes)
 
-Watched files: `server-config.json`, `model-mapping.json`, `kiro-accounts.json`
+Config files: `server-config.json`, `model-mapping.json`, `kiro-accounts.json`
+
+**Note**: When adding/removing accounts via Web UI, configs are automatically reloaded via `configWatcher.reload()` calls.
 
 ### Logging
 
@@ -117,6 +140,33 @@ All logs go to `logs/` directory with automatic rotation:
 Log level configurable via API: DEBUG, INFO, WARN, ERROR
 
 ## Setup
+
+### Quick Setup (Windows)
+
+[start.bat](start.bat) automates the entire setup process:
+1. Checks Node.js installation
+2. Installs backend dependencies (if `node_modules/` missing)
+3. Installs frontend dependencies (if `public/node_modules/` missing)
+4. Builds frontend with Vite (creates `public/dist/`)
+5. Starts the server
+
+Double-click `start.bat` or run from command line. First-time setup takes a few minutes for all dependencies and build.
+
+### Manual Setup
+
+```bash
+# Install backend dependencies
+npm install
+
+# Install and build frontend
+cd public
+npm install
+npm run build
+cd ..
+
+# Start server
+npm run server
+```
 
 ### Account Configuration
 
@@ -159,3 +209,11 @@ Kiro API returns binary AWS Event Stream format. [KiroClient.js](src/KiroClient.
 2. Each chunk prefixed with 12-byte header (total length, headers length, prelude CRC)
 3. Payload contains JSON events: `messageStart`, `contentBlockDelta`, `messageStop`
 4. Aggregates deltas into complete message for non-streaming, forwards chunks for streaming
+
+### Error Handling
+
+[claude-api-server.js](src/claude-api-server.js) translates errors to Claude API format:
+- Maps HTTP status codes to Claude error types (`invalid_request_error`, `authentication_error`, `rate_limit_error`, etc.)
+- Extracts and preserves original Kiro API error messages from JSON responses
+- Special handling: Backend auth failures return 400 to stop client retries
+- Feeds into failover logic: quota/auth errors trigger account switching via `shouldSwitchAccount()`

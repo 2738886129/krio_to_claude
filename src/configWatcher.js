@@ -112,10 +112,12 @@ class ConfigWatcher extends EventEmitter {
    * 开始监听配置文件变化
    */
   startWatching() {
-    for (const [key, filename] of Object.entries(CONFIG_FILES)) {
-      this.watchFile(key, filename);
-    }
-    log('👀 配置文件监听已启动');
+    log('⚠️  自动文件监听已禁用，仅支持手动重载');
+    // 自动监听已禁用，仅保留手动 reload() 功能
+    // for (const [key, filename] of Object.entries(CONFIG_FILES)) {
+    //   this.watchFile(key, filename);
+    // }
+    // log('👀 配置文件监听已启动');
   }
 
   /**
