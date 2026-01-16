@@ -16,32 +16,53 @@ if %errorlevel% neq 0 (
 
 :: 检查 node_modules 是否存在
 if not exist "node_modules" (
-    echo [提示] 首次运行，正在安装依赖...
+    echo [提示] 首次运行，正在安装后端依赖...
     call npm install
     if %errorlevel% neq 0 (
-        echo [错误] 依赖安装失败
+        echo [错误] 后端依赖安装失败
         pause
         exit /b 1
     )
-    echo [成功] 依赖安装完成
+    echo [成功] 后端依赖安装完成
     echo.
 )
 
-:: 自动重启循环
-:start
+:: 检查前端 node_modules 是否存在
+if not exist "public\node_modules" (
+    echo [提示] 正在安装前端依赖...
+    cd public
+    call npm install
+    if %errorlevel% neq 0 (
+        echo [错误] 前端依赖安装失败
+        cd ..
+        pause
+        exit /b 1
+    )
+    cd ..
+    echo [成功] 前端依赖安装完成
+    echo.
+)
+
+:: 打包前端项目
+echo [提示] 正在打包前端项目...
+cd public
+call npm run build
+if %errorlevel% neq 0 (
+    echo [错误] 前端打包失败
+    cd ..
+    pause
+    exit /b 1
+)
+cd ..
+echo [成功] 前端打包完成
+echo.
+
+:: 启动服务器
 echo [启动] 正在启动服务器...
 node src/claude-api-server.js
-set exitcode=%errorlevel%
 
-:: 退出码 0 表示正常重启请求
-if %exitcode% equ 0 (
+if %errorlevel% neq 0 (
     echo.
-    echo [重启] 服务器请求重启，3 秒后重新启动...
-    timeout /t 3 /nobreak >nul
-    goto start
+    echo [错误] 服务器异常退出，错误代码: %errorlevel%
+    pause
 )
-
-:: 其他退出码表示异常
-echo.
-echo [错误] 服务器异常退出，错误代码: %exitcode%
-pause

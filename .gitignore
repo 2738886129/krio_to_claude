@@ -1,7 +1,16 @@
 node_modules/
 npm-debug.log
-.DS_Store
 *.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# IDE/编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # 日志文件夹（保留 .gitkeep）
 logs/*
@@ -10,6 +19,18 @@ logs/*
 # Token 文件（包含敏感信息）
 config/kiro-auth-token.json
 config/kiro-accounts.json
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local
+
+# 构建产物
+public/dist/
+
+# 包管理器锁文件（可选）
+# package-lock.json
+# public/package-lock.json
 
 # Claude Code 临时文件
 tmpclaude-*

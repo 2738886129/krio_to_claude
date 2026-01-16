@@ -1,21 +1,25 @@
 const KiroClient = require("./KiroClient");
-const { loadToken } = require("./loadToken");
+const { getBestAccountToken } = require("./loadMultiAccount");
 
 /**
  * 使用示例
  *
- * Token 从 kiro-auth-token.json 文件读取
+ * Token 从 kiro-accounts.json 文件读取
  */
 
 // ========== 初始化客户端 ==========
 let client;
-try {
-  const BEARER_TOKEN = loadToken();
-  client = new KiroClient(BEARER_TOKEN);
-  console.log("✅ Token 加载成功");
-} catch (error) {
-  console.error("❌ Token 加载失败:", error.message);
-  process.exit(1);
+
+async function initClient() {
+  try {
+    const { token, account } = await getBestAccountToken();
+    client = new KiroClient(token);
+    console.log(`✅ Token 加载成功 (账号: ${account.email})`);
+    return client;
+  } catch (error) {
+    console.error("❌ Token 加载失败:", error.message);
+    process.exit(1);
+  }
 }
 
 // ========== 示例 2: 获取可用模型 ==========
@@ -76,6 +80,9 @@ async function example3_simpleChat() {
 async function main() {
   console.log("🚀 Kiro API 客户端示例");
   console.log("=".repeat(50));
+
+  // 初始化客户端
+  await initClient();
 
   // 验证 Token
   try {

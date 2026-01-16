@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const KiroClient = require('./KiroClient');
-const { loadToken } = require('./loadToken');
+const { getBestAccountToken } = require('./loadMultiAccount');
 
 const MAPPING_FILE = path.join(__dirname, '..', 'config', 'model-mapping.json');
 
@@ -95,8 +95,8 @@ async function listKiroModels() {
   console.log('\n========== Kiro API 支持的模型 ==========\n');
   
   try {
-    const BEARER_TOKEN = loadToken();
-    const client = new KiroClient(BEARER_TOKEN);
+    const { token } = await getBestAccountToken();
+    const client = new KiroClient(token);
     
     const result = await client.listAvailableModels();
     

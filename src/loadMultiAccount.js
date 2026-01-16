@@ -1,9 +1,43 @@
 const fs = require('fs');
 const path = require('path');
-const { refreshSocialToken } = require('./loadToken');
 const { log, logWarn, logError } = require('./logger');
 
+const KIRO_AUTH_ENDPOINT = 'https://prod.us-east-1.auth.desktop.kiro.dev';
 const ACCOUNTS_PATH = path.join(__dirname, '..', 'config', 'kiro-accounts.json');
+
+/**
+ * 刷新 Token
+ * @param {string} refreshToken - 刷新令牌
+ * @returns {Promise<object>} 刷新结果
+ */
+async function refreshSocialToken(refreshToken) {
+  const url = `${KIRO_AUTH_ENDPOINT}/refreshToken`;
+  
+  log('🔄 正在刷新 Token...');
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'kiro-account-manager/1.0.0'
+    },
+    body: JSON.stringify({ refreshToken })
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`刷新 Token 失败 (${response.status}): ${errorText}`);
+  }
+  
+  const data = await response.json();
+  
+  return {
+    success: true,
+    accessToken: data.accessToken,
+    refreshToken: data.refreshToken || refreshToken,
+    expiresIn: data.expiresIn
+  };
+}
 
 /**
  * 加载多账号配置文件

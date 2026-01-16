@@ -1,6 +1,5 @@
 const express = require('express');
 const KiroClient = require('./KiroClient');
-const { loadToken, loadTokenWithRefresh, loadTokenInfo, needsRefresh } = require('./loadToken');
 const { getBestAccountToken, getAccountToken, accountNeedsRefresh, findAccountById, shouldSwitchAccount, switchToNextAccount, getAvailableAccounts } = require('./loadMultiAccount');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
@@ -15,7 +14,7 @@ const app = express();
 app.use(express.json({ limit: '50mb' }));
 
 // 静态文件服务 - Web管理界面
-app.use(express.static(path.join(__dirname, '..', 'public')));
+app.use(express.static(path.join(__dirname, '..', 'public', 'dist')));
 
 // Web管理API路由
 app.use(webAdminRouter);
@@ -106,16 +105,13 @@ let serverConfig = configWatcher.get('server');
 log(`✅ 加载服务器配置: host=${serverConfig.server.host}, port=${serverConfig.server.port}, chunkSize=${serverConfig.stream.chunkSize}`);
 log(`   Token 刷新配置: 最大重试=${serverConfig.token.refreshRetryMax}次, 重试间隔=${serverConfig.token.refreshRetryIntervalMs}ms, 提前刷新=${serverConfig.token.refreshBufferMinutes}分钟`);
 log(`   连接池配置: maxSockets=${serverConfig.connectionPool.maxSockets}, maxFreeSockets=${serverConfig.connectionPool.maxFreeSockets}, socketTimeout=${serverConfig.connectionPool.socketTimeout}ms`);
-log(`   账号配置: 多账号模式=${serverConfig.account.multiAccountEnabled ? '启用' : '禁用'}, 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
+log(`   账号配置: 策略=${serverConfig.account.strategy}, 自动切换=${serverConfig.account.autoSwitchOnError ? '启用' : '禁用'}`);
 
-// 启动配置文件监听
-configWatcher.startWatching();
-
-// 监听配置变化事件
+// 监听配置变化事件（手动触发重载时生效）
 configWatcher.on('configChanged', (event) => {
-  const { key, filename, changes, manual } = event;
+  const { key, filename, changes } = event;
   
-  log(`\n🔄 配置热重载: ${filename} ${manual ? '(手动触发)' : '(自动检测)'}`);
+  log(`\n🔄 配置热重载: ${filename}`);
   
   if (changes && changes.length > 0) {
     log(`   变更项: ${changes.length} 个`);
@@ -146,16 +142,6 @@ configWatcher.on('configChanged', (event) => {
 function handleServerConfigReload(newConfig) {
   const oldConfig = serverConfig;
   serverConfig = newConfig;
-
-  // 检查账号模式是否变化 - 这是危险操作
-  const oldMultiAccount = oldConfig?.account?.multiAccountEnabled || false;
-  const newMultiAccount = newConfig?.account?.multiAccountEnabled || false;
-  
-  if (oldMultiAccount !== newMultiAccount) {
-    log(`   ⚠️ 账号模式已变更: ${oldMultiAccount ? '多账号' : '单账号'} -> ${newMultiAccount ? '多账号' : '单账号'}`);
-    log(`   ⚠️ 此更改需要重启服务器才能完全生效，当前请求可能使用旧模式`);
-    // 不自动切换，因为可能导致状态不一致
-  }
 
   // 检查连接池配置是否变化
   const oldPool = oldConfig?.connectionPool || {};
@@ -217,57 +203,35 @@ function validateConfig() {
     errors.push(`服务器配置文件不存在: config/server-config.json`);
   }
 
-  // 根据模式检查对应的认证配置
-  if (serverConfig.account.multiAccountEnabled) {
-    // 多账号模式：检查 kiro-accounts.json
-    const accountsPath = path.join(configDir, 'kiro-accounts.json');
-    if (!fs.existsSync(accountsPath)) {
-      errors.push(`多账号配置文件不存在: config/kiro-accounts.json`);
-      errors.push(`提示: 多账号模式已启用，请创建 kiro-accounts.json 配置文件`);
-    } else {
-      try {
-        const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
-        if (!accountsData.accounts || accountsData.accounts.length === 0) {
-          errors.push(`多账号配置文件中没有账号: config/kiro-accounts.json`);
+  // 检查账号配置文件
+  const accountsPath = path.join(configDir, 'kiro-accounts.json');
+  if (!fs.existsSync(accountsPath)) {
+    errors.push(`账号配置文件不存在: config/kiro-accounts.json`);
+    errors.push(`提示: 请创建 kiro-accounts.json 配置文件`);
+  } else {
+    try {
+      const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
+      if (!accountsData.accounts || accountsData.accounts.length === 0) {
+        errors.push(`账号配置文件中没有账号: config/kiro-accounts.json`);
+      } else {
+        // 检查是否有至少一个可用账号
+        const activeAccounts = accountsData.accounts.filter(acc => acc.status === 'active');
+        if (activeAccounts.length === 0) {
+          errors.push(`没有可用的账号（status 为 active）`);
         } else {
-          // 检查是否有至少一个可用账号
-          const activeAccounts = accountsData.accounts.filter(acc => acc.status === 'active');
-          if (activeAccounts.length === 0) {
-            errors.push(`没有可用的账号（status 为 active）`);
-          } else {
-            // 检查账号是否有有效的凭证
-            const validAccounts = activeAccounts.filter(acc =>
-              acc.credentials &&
-              acc.credentials.accessToken &&
-              acc.credentials.accessToken !== 'YOUR_ACCESS_TOKEN_HERE'
-            );
-            if (validAccounts.length === 0) {
-              errors.push(`没有配置有效 accessToken 的账号`);
-            }
+          // 检查账号是否有有效的凭证
+          const validAccounts = activeAccounts.filter(acc =>
+            acc.credentials &&
+            acc.credentials.accessToken &&
+            acc.credentials.accessToken !== 'YOUR_ACCESS_TOKEN_HERE'
+          );
+          if (validAccounts.length === 0) {
+            errors.push(`没有配置有效 accessToken 的账号`);
           }
         }
-      } catch (e) {
-        errors.push(`多账号配置文件格式错误: ${e.message}`);
       }
-    }
-  } else {
-    // 单账号模式：检查 kiro-auth-token.json
-    const tokenPath = path.join(configDir, 'kiro-auth-token.json');
-    if (!fs.existsSync(tokenPath)) {
-      errors.push(`认证配置文件不存在: config/kiro-auth-token.json`);
-      errors.push(`提示: 请复制 config/kiro-auth-token.example.json 为 config/kiro-auth-token.json 并填入您的凭证`);
-    } else {
-      try {
-        const tokenData = JSON.parse(fs.readFileSync(tokenPath, 'utf8'));
-        if (!tokenData.accessToken || tokenData.accessToken === 'YOUR_ACCESS_TOKEN_HERE') {
-          errors.push(`请在 config/kiro-auth-token.json 中填入真实的 accessToken`);
-        }
-        if (!tokenData.refreshToken || tokenData.refreshToken === 'YOUR_REFRESH_TOKEN_HERE') {
-          errors.push(`请在 config/kiro-auth-token.json 中填入真实的 refreshToken`);
-        }
-      } catch (e) {
-        errors.push(`认证配置文件格式错误: ${e.message}`);
-      }
+    } catch (e) {
+      errors.push(`账号配置文件格式错误: ${e.message}`);
     }
   }
 
@@ -358,10 +322,10 @@ function getNextRefreshDelay(expiresAt) {
  * 获取最大重试次数（等于可用账号数量）
  */
 function getMaxRetries() {
-  if (!serverConfig.account.multiAccountEnabled || !serverConfig.account.autoSwitchOnError) {
+  if (!serverConfig.account.autoSwitchOnError) {
     return 0;
   }
-  
+
   const availableCount = getAvailableAccounts().length;
   return availableCount;
 }
@@ -372,29 +336,22 @@ function getMaxRetries() {
 async function backgroundRefreshToken() {
   try {
     log('🔄 后台刷新 Token...');
-    
+
     let newToken;
-    
-    if (serverConfig.account.multiAccountEnabled) {
-      // 多账号模式：刷新当前账号
-      if (currentAccount) {
-        newToken = await getAccountToken(currentAccount.id, { 
-          bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 
-        });
-        // 重新获取账号信息（可能已更新）
-        currentAccount = findAccountById(currentAccount.id);
-        log(`✅ 账号 ${currentAccount.email} Token 后台刷新成功`);
-      } else {
-        log('⚠️ 当前没有选中的账号，跳过刷新');
-        return;
-      }
-    } else {
-      // 单账号模式
-      newToken = await loadTokenWithRefresh({ 
-        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60 
+
+    // 刷新当前账号
+    if (currentAccount) {
+      newToken = await getAccountToken(currentAccount.id, {
+        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
       });
+      // 重新获取账号信息（可能已更新）
+      currentAccount = findAccountById(currentAccount.id);
+      log(`✅ 账号 ${currentAccount.email} Token 后台刷新成功`);
+    } else {
+      log('⚠️ 当前没有选中的账号，跳过刷新');
+      return;
     }
-    
+
     if (newToken && newToken !== currentToken) {
       currentToken = newToken;
       kiroClient = new KiroClient(currentToken, {
@@ -405,16 +362,16 @@ async function backgroundRefreshToken() {
       });
       log('✅ Token 后台刷新成功，客户端已更新');
     }
-    
+
     // 刷新成功，重置重试计数
     refreshRetryCount = 0;
-    
+
     // 设置下次刷新定时器
     scheduleNextRefresh();
   } catch (error) {
     refreshRetryCount++;
     logError(`后台 Token 刷新失败 (${refreshRetryCount}/${serverConfig.token.refreshRetryMax})`, error);
-    
+
     if (refreshRetryCount < serverConfig.token.refreshRetryMax) {
       // 未达到最大重试次数，继续重试
       log(`⏰ ${serverConfig.token.refreshRetryIntervalMs / 1000} 秒后重试...`);
@@ -433,21 +390,15 @@ function scheduleNextRefresh() {
   if (refreshTimer) {
     clearTimeout(refreshTimer);
   }
-  
+
   try {
     let expiresAt;
-    
-    if (serverConfig.account.multiAccountEnabled) {
-      // 多账号模式：使用当前账号的过期时间
-      if (currentAccount && currentAccount.credentials && currentAccount.credentials.expiresAt) {
-        expiresAt = currentAccount.credentials.expiresAt;
-      }
-    } else {
-      // 单账号模式
-      const tokenInfo = loadTokenInfo();
-      expiresAt = tokenInfo.expiresAt;
+
+    // 使用当前账号的过期时间
+    if (currentAccount && currentAccount.credentials && currentAccount.credentials.expiresAt) {
+      expiresAt = currentAccount.credentials.expiresAt;
     }
-    
+
     if (expiresAt) {
       const delay = getNextRefreshDelay(expiresAt);
       const nextRefreshTime = new Date(Date.now() + delay);
@@ -463,26 +414,20 @@ function scheduleNextRefresh() {
 (async () => {
   try {
     let BEARER_TOKEN;
-    
-    if (serverConfig.account.multiAccountEnabled) {
-      // 多账号模式：选择最佳账号
-      log('🔄 多账号模式已启用，正在选择最佳账号...');
-      const result = await getBestAccountToken({
-        strategy: serverConfig.account.strategy,
-        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
-      });
-      BEARER_TOKEN = result.token;
-      currentAccount = result.account;
-      log(`✅ 已选择账号: ${currentAccount.email}`);
-      log(`   用户ID: ${currentAccount.userId}`);
-      log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
-      log(`   额度: ${currentAccount.usage?.current || 0}/${currentAccount.usage?.limit || 0}`);
-    } else {
-      // 单账号模式
-      log('🔄 单账号模式，从 kiro-auth-token.json 加载...');
-      BEARER_TOKEN = loadToken();
-    }
-    
+
+    // 选择最佳账号
+    log('🔄 正在选择最佳账号...');
+    const result = await getBestAccountToken({
+      strategy: serverConfig.account.strategy,
+      bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
+    });
+    BEARER_TOKEN = result.token;
+    currentAccount = result.account;
+    log(`✅ 已选择账号: ${currentAccount.email}`);
+    log(`   用户ID: ${currentAccount.userId}`);
+    log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+    log(`   额度: ${currentAccount.usage?.current || 0}/${currentAccount.usage?.limit || 0}`);
+
     currentToken = BEARER_TOKEN;
     kiroClient = new KiroClient(BEARER_TOKEN, {
       maxSockets: serverConfig.connectionPool.maxSockets,
@@ -491,17 +436,10 @@ function scheduleNextRefresh() {
       timeout: serverConfig.connectionPool.requestTimeout
     });
     log('✅ Kiro 客户端初始化成功');
-    
+
     // 检查是否需要立即刷新，否则设置定时器
-    let needsRefreshNow = false;
-    
-    if (serverConfig.account.multiAccountEnabled) {
-      needsRefreshNow = accountNeedsRefresh(currentAccount, serverConfig.token.refreshBufferMinutes * 60);
-    } else {
-      const tokenInfo = loadTokenInfo();
-      needsRefreshNow = needsRefresh(tokenInfo, serverConfig.token.refreshBufferMinutes * 60);
-    }
-    
+    const needsRefreshNow = accountNeedsRefresh(currentAccount, serverConfig.token.refreshBufferMinutes * 60);
+
     if (needsRefreshNow) {
       log('⚠️ Token 已过期或即将过期，立即刷新');
       backgroundRefreshToken();
@@ -1197,10 +1135,9 @@ app.post('/v1/messages', async (req, res) => {
           
         } catch (error) {
           // 检查是否应该切换账号
-          if (serverConfig.account.multiAccountEnabled && 
-              serverConfig.account.autoSwitchOnError &&
-              currentAccount && 
-              shouldSwitchAccount(error) && 
+          if (serverConfig.account.autoSwitchOnError &&
+              currentAccount &&
+              shouldSwitchAccount(error) &&
               retryCount < maxRetries) {
             
             log(`⚠️ 检测到账号问题: ${error.message}`);
@@ -1430,11 +1367,10 @@ app.post('/v1/messages', async (req, res) => {
       } catch (error) {
         // 检查是否应该切换账号
         // 注意：流式响应只能在流开始之前切换，一旦开始发送数据就无法切换了
-        if (!streamStarted && 
-            serverConfig.account.multiAccountEnabled && 
+        if (!streamStarted &&
             serverConfig.account.autoSwitchOnError &&
-            currentAccount && 
-            shouldSwitchAccount(error) && 
+            currentAccount &&
+            shouldSwitchAccount(error) &&
             retryCount < maxRetries) {
           
           log(`⚠️ [流式] 检测到账号问题: ${error.message}`);

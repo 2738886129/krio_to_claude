@@ -27,22 +27,9 @@ npm install
 
 ### 配置账号
 
-**方式一：单账号模式**
-
-将 `config/kiro-auth-token.example.json` 重命名为 `kiro-auth-token.json`，并填入你的 token：
-
-```json
-{
-  "accessToken": "your_access_token",
-  "refreshToken": "your_refresh_token"
-}
-```
-
-**方式二：多账号模式（推荐）**
+创建 `config/kiro-accounts.json` 文件：
 
 > 💡 该文件结构与 Kiro 账号管理器的导出格式兼容，可直接通过 Kiro 账号管理器生成使用。
-
-创建 `config/kiro-accounts.json` 文件：
 
 ```json
 {
@@ -85,8 +72,7 @@ node src/claude-api-server.js
 
 ```
 ├── config/                    # 配置文件目录
-│   ├── kiro-auth-token.example.json  # 单账号模板
-│   ├── kiro-accounts.json           # 多账号配置
+│   ├── kiro-accounts.json           # 账号配置
 │   ├── model-mapping.json           # 模型映射配置
 │   ├── server-config.json           # 服务器配置
 │   └── README.md                    # 配置说明文档
@@ -99,8 +85,7 @@ node src/claude-api-server.js
 ├── src/                       # 源代码
 │   ├── KiroClient.js          # Kiro API 客户端
 │   ├── claude-api-server.js   # Claude API 代理服务器
-│   ├── loadToken.js           # Token 管理（单账号）
-│   ├── loadMultiAccount.js    # 多账号管理系统
+│   ├── loadMultiAccount.js    # 账号管理系统
 │   ├── configWatcher.js       # 配置文件热加载
 │   ├── logger.js              # 日志系统
 │   ├── web-admin.js           # Web 管理 API
@@ -119,7 +104,6 @@ node src/claude-api-server.js
 {
   "port": 3000,
   "host": "0.0.0.0",
-  "accountMode": "multi", // "single" 或 "multi"
   "strategy": "auto", // 账号选择策略
   "autoSwitchOnError": true, // 错误时自动切换
   "connectionPool": {

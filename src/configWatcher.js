@@ -23,7 +23,7 @@ const DEFAULT_CONFIGS = {
     stream: { chunkSize: 4 },
     token: { refreshRetryMax: 3, refreshRetryIntervalMs: 60000, refreshBufferMinutes: 5 },
     connectionPool: { maxSockets: 20, maxFreeSockets: 10, socketTimeout: 60000, requestTimeout: 30000 },
-    account: { multiAccountEnabled: false, strategy: 'auto', autoSwitchOnError: true },
+    account: { strategy: 'auto', autoSwitchOnError: true },
     logging: { level: 'INFO', rotation: { maxSize: 10485760, maxFiles: 5 } }
   },
   models: {
