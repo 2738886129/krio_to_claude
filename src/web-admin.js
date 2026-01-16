@@ -424,6 +424,191 @@ router.post('/api/accounts/:accountId/test', async (req, res) => {
   }
 });
 
+// 添加单个账号
+router.post('/api/accounts', async (req, res) => {
+  log(`➕ 添加账号请求`);
+  
+  try {
+    const credentials = req.body;
+    
+    // 验证必要字段
+    if (!credentials.accessToken || !credentials.refreshToken) {
+      return res.status(400).json({ error: '缺少必要的凭证信息 (accessToken, refreshToken)' });
+    }
+    
+    const accountsFile = path.join(CONFIG_DIR, 'kiro-accounts.json');
+    let data = { version: '1.0.0', accounts: [], groups: [], tags: [] };
+    
+    if (fs.existsSync(accountsFile)) {
+      data = JSON.parse(fs.readFileSync(accountsFile, 'utf8'));
+    }
+    
+    // 生成账号序号
+    const accountIndex = data.accounts.length + 1;
+    const defaultName = `账号-${accountIndex}`;
+    
+    // 生成新账号
+    const newAccount = {
+      email: credentials.email || defaultName,
+      userId: '',
+      nickname: credentials.email ? credentials.email.split('@')[0] : defaultName,
+      idp: credentials.provider || 'Google',
+      credentials: {
+        accessToken: credentials.accessToken,
+        csrfToken: '',
+        refreshToken: credentials.refreshToken,
+        clientId: '',
+        clientSecret: '',
+        region: credentials.region || 'us-east-1',
+        expiresAt: credentials.expiresAt ? new Date(credentials.expiresAt).getTime() : Date.now() + 3600000,
+        authMethod: credentials.authMethod || 'social',
+        provider: credentials.provider || 'Google'
+      },
+      subscription: {
+        type: 'Unknown',
+        title: 'UNKNOWN',
+        rawType: '',
+        daysRemaining: 0,
+        expiresAt: 0
+      },
+      usage: {
+        current: 0,
+        limit: 0,
+        percentUsed: 0,
+        lastUpdated: Date.now()
+      },
+      tags: [],
+      status: 'active',
+      lastUsedAt: 0,
+      id: require('crypto').randomUUID(),
+      createdAt: Date.now(),
+      lastCheckedAt: 0
+    };
+    
+    // 尝试获取账号信息
+    try {
+      const kiroClient = new KiroClient(newAccount.credentials.accessToken);
+      
+      // 获取用户资料（邮箱等）
+      try {
+        const userInfo = await kiroClient.getUserInfo();
+        if (userInfo) {
+          newAccount.email = userInfo.email || newAccount.email;
+          newAccount.userId = userInfo.userId || '';
+          newAccount.nickname = userInfo.email ? userInfo.email.split('@')[0] : newAccount.nickname;
+          newAccount.idp = userInfo.idp || newAccount.idp;
+        }
+      } catch (profileErr) {
+        log(`⚠️ 获取用户资料失败: ${profileErr.message}`);
+      }
+      
+      // 获取额度信息
+      const usageData = await kiroClient.getUsageLimits();
+      
+      if (usageData) {
+        // 如果没有从 profile 获取到，尝试从 usageData 获取
+        if (!newAccount.userId && usageData.userInfo) {
+          newAccount.userId = usageData.userInfo.userId || '';
+        }
+        
+        // 提取订阅信息
+        if (usageData.subscriptionInfo) {
+          const sub = usageData.subscriptionInfo;
+          const typeMap = {
+            'Q_DEVELOPER_STANDALONE_FREE': 'Free',
+            'Q_DEVELOPER_STANDALONE_PRO': 'Pro',
+            'KIRO_FREE': 'Free',
+            'KIRO_PRO': 'Pro'
+          };
+          
+          // 计算剩余天数：从 usageBreakdownList 或顶层获取 nextDateReset
+          let daysRemaining = 0;
+          const nextReset = usageData.usageBreakdownList?.[0]?.nextDateReset || usageData.nextDateReset;
+          if (nextReset) {
+            const resetDate = new Date(nextReset * 1000);
+            const now = new Date();
+            daysRemaining = Math.max(0, Math.ceil((resetDate - now) / (1000 * 60 * 60 * 24)));
+          }
+          
+          newAccount.subscription = {
+            type: typeMap[sub.type] || sub.type || 'Unknown',
+            title: sub.subscriptionTitle || 'UNKNOWN',
+            rawType: sub.type || '',
+            daysRemaining: daysRemaining,
+            expiresAt: nextReset ? nextReset * 1000 : 0,
+            managementTarget: sub.subscriptionManagementTarget || '',
+            upgradeCapability: sub.upgradeCapability || '',
+            overageCapability: sub.overageCapability || ''
+          };
+        }
+        
+        // 提取使用量信息
+        if (usageData.usageBreakdownList && usageData.usageBreakdownList.length > 0) {
+          const breakdown = usageData.usageBreakdownList[0];
+          const trialInfo = breakdown.freeTrialInfo || {};
+          
+          const baseLimit = breakdown.usageLimit || 0;
+          const baseCurrent = breakdown.currentUsage || 0;
+          const trialLimit = trialInfo.usageLimit || 0;
+          const trialCurrent = trialInfo.currentUsage || 0;
+          
+          const totalLimit = baseLimit + trialLimit;
+          const totalCurrent = baseCurrent + trialCurrent;
+          
+          newAccount.usage = {
+            current: totalCurrent,
+            limit: totalLimit,
+            percentUsed: totalLimit > 0 ? (totalCurrent / totalLimit) : 0,
+            lastUpdated: Date.now(),
+            baseLimit: baseLimit,
+            baseCurrent: baseCurrent,
+            freeTrialLimit: trialLimit,
+            freeTrialCurrent: trialCurrent,
+            freeTrialExpiry: trialInfo.freeTrialExpiry ? new Date(trialInfo.freeTrialExpiry * 1000).toISOString() : '',
+            nextResetDate: breakdown.nextDateReset ? new Date(breakdown.nextDateReset * 1000).toISOString() : ''
+          };
+        }
+      }
+      
+      newAccount.lastCheckedAt = Date.now();
+      log(`✅ 成功获取账号信息: ${newAccount.email || newAccount.userId}, 额度: ${newAccount.usage.current}/${newAccount.usage.limit}`);
+    } catch (err) {
+      log(`⚠️ 获取账号信息失败，使用默认值: ${err.message}`);
+    }
+    
+    // 检查是否已存在相同账号
+    const existingIndex = data.accounts.findIndex(acc => 
+      acc.credentials?.accessToken === credentials.accessToken
+    );
+    
+    if (existingIndex !== -1) {
+      return res.status(400).json({ error: '该账号已存在' });
+    }
+    
+    data.accounts.push(newAccount);
+    fs.writeFileSync(accountsFile, JSON.stringify(data, null, 2), 'utf8');
+    
+    log(`✅ 账号已添加: ${newAccount.email || newAccount.id}`);
+    
+    // 触发热重载
+    configWatcher.reload('accounts');
+    
+    res.json({
+      success: true,
+      message: `账号已添加${newAccount.email ? ': ' + newAccount.email : ''}`,
+      account: {
+        id: newAccount.id,
+        email: newAccount.email,
+        status: newAccount.status,
+        usage: newAccount.usage
+      }
+    });
+  } catch (error) {
+    log(`❌ 添加账号失败: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 删除账号
 router.delete('/api/accounts/:accountId', (req, res) => {
   const accountId = req.params.accountId;

@@ -84,6 +84,42 @@ class KiroClient {
   }
 
   /**
+   * 获取用户资料信息（包含邮箱）
+   * 使用 Kiro Web Portal API
+   * @returns {Promise<object>} 用户资料
+   */
+  async getUserInfo() {
+    try {
+      const cbor = require('cbor');
+      const body = cbor.encode({ origin: 'KIRO_IDE' });
+      
+      const response = await axios.post(
+        'https://app.kiro.dev/service/KiroWebPortalService/operation/GetUserInfo',
+        body,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.token}`,
+            'Content-Type': 'application/cbor',
+            'Accept': 'application/cbor',
+            'smithy-protocol': 'rpc-v2-cbor',
+            'amz-sdk-invocation-id': uuidv4(),
+            'amz-sdk-request': 'attempt=1; max=1',
+            'x-amz-user-agent': 'aws-sdk-js/1.0.0 kiro-account-manager/1.0.0',
+            'Cookie': `Idp=Google; AccessToken=${this.token}`
+          },
+          responseType: 'arraybuffer',
+          httpsAgent: this.httpsAgent
+        }
+      );
+      
+      const data = cbor.decode(Buffer.from(response.data));
+      return data;
+    } catch (error) {
+      throw this._handleError(error);
+    }
+  }
+
+  /**
    * 获取用户配额信息
    * @param {object} params - 查询参数
    * @returns {Promise<object>} 配额信息

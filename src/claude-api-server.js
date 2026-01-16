@@ -1,6 +1,6 @@
 const express = require('express');
 const KiroClient = require('./KiroClient');
-const { getBestAccountToken, getAccountToken, accountNeedsRefresh, findAccountById, shouldSwitchAccount, switchToNextAccount, getAvailableAccounts } = require('./loadMultiAccount');
+const { getBestAccountToken, getAccountToken, accountNeedsRefresh, findAccountById, shouldSwitchAccount, switchToNextAccount, getAvailableAccounts, updateAccountLastUsed } = require('./loadMultiAccount');
 const { v4: uuidv4 } = require('uuid');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
@@ -132,9 +132,49 @@ configWatcher.on('configChanged', (event) => {
   } else if (key === 'models') {
     handleModelConfigReload(event.newConfig);
   } else if (key === 'accounts') {
-    log(`   账号配置已更新，将在下次请求时生效`);
+    handleAccountsConfigReload();
   }
 });
+
+/**
+ * 处理账号配置热重载
+ */
+async function handleAccountsConfigReload() {
+  log(`   🔄 账号配置已更新`);
+  
+  // 如果当前没有客户端，尝试初始化
+  if (!kiroClient) {
+    log(`   📌 当前无可用客户端，尝试初始化...`);
+    try {
+      const result = await getBestAccountToken({
+        strategy: serverConfig.account.strategy,
+        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
+      });
+      
+      currentAccount = result.account;
+      currentToken = result.token;
+      
+      log(`   ✅ 已选择账号: ${currentAccount.email}`);
+      log(`      使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+      
+      kiroClient = new KiroClient(currentToken, {
+        maxSockets: serverConfig.connectionPool.maxSockets,
+        maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+        socketTimeout: serverConfig.connectionPool.socketTimeout,
+        timeout: serverConfig.connectionPool.requestTimeout
+      });
+      log(`   ✅ Kiro 客户端已初始化`);
+      
+      scheduleNextRefresh();
+    } catch (error) {
+      log(`   ⚠️  账号初始化失败: ${error.message}`);
+    }
+  } else {
+    // 已有客户端，只记录日志，不切换账号
+    log(`   ℹ️  当前账号: ${currentAccount?.email || '未知'}`);
+    log(`   ℹ️  新账号将在下次自动切换或手动切换时生效`);
+  }
+}
 
 /**
  * 处理服务器配置热重载
@@ -203,21 +243,22 @@ function validateConfig() {
     errors.push(`服务器配置文件不存在: config/server-config.json`);
   }
 
-  // 检查账号配置文件
+  // 检查账号配置文件（可选，不存在时允许启动）
   const accountsPath = path.join(configDir, 'kiro-accounts.json');
   if (!fs.existsSync(accountsPath)) {
-    errors.push(`账号配置文件不存在: config/kiro-accounts.json`);
-    errors.push(`提示: 请创建 kiro-accounts.json 配置文件`);
+    // 账号配置文件不存在，仅记录警告，不阻止启动
+    console.log('⚠️  账号配置文件不存在: config/kiro-accounts.json');
+    console.log('   提示: 可通过 Web 管理界面添加账号');
   } else {
     try {
       const accountsData = JSON.parse(fs.readFileSync(accountsPath, 'utf8'));
       if (!accountsData.accounts || accountsData.accounts.length === 0) {
-        errors.push(`账号配置文件中没有账号: config/kiro-accounts.json`);
+        console.log('⚠️  账号配置文件中没有账号: config/kiro-accounts.json');
       } else {
         // 检查是否有至少一个可用账号
         const activeAccounts = accountsData.accounts.filter(acc => acc.status === 'active');
         if (activeAccounts.length === 0) {
-          errors.push(`没有可用的账号（status 为 active）`);
+          console.log('⚠️  没有可用的账号（status 为 active）');
         } else {
           // 检查账号是否有有效的凭证
           const validAccounts = activeAccounts.filter(acc =>
@@ -226,7 +267,7 @@ function validateConfig() {
             acc.credentials.accessToken !== 'YOUR_ACCESS_TOKEN_HERE'
           );
           if (validAccounts.length === 0) {
-            errors.push(`没有配置有效 accessToken 的账号`);
+            console.log('⚠️  没有配置有效 accessToken 的账号');
           }
         }
       }
@@ -415,39 +456,48 @@ function scheduleNextRefresh() {
   try {
     let BEARER_TOKEN;
 
-    // 选择最佳账号
+    // 尝试选择最佳账号
     log('🔄 正在选择最佳账号...');
-    const result = await getBestAccountToken({
-      strategy: serverConfig.account.strategy,
-      bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
-    });
-    BEARER_TOKEN = result.token;
-    currentAccount = result.account;
-    log(`✅ 已选择账号: ${currentAccount.email}`);
-    log(`   用户ID: ${currentAccount.userId}`);
-    log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
-    log(`   额度: ${currentAccount.usage?.current || 0}/${currentAccount.usage?.limit || 0}`);
+    try {
+      const result = await getBestAccountToken({
+        strategy: serverConfig.account.strategy,
+        bufferSeconds: serverConfig.token.refreshBufferMinutes * 60
+      });
+      BEARER_TOKEN = result.token;
+      currentAccount = result.account;
+      log(`✅ 已选择账号: ${currentAccount.email}`);
+      log(`   用户ID: ${currentAccount.userId}`);
+      log(`   使用率: ${(currentAccount.usage?.percentUsed * 100 || 0).toFixed(1)}%`);
+      log(`   额度: ${currentAccount.usage?.current || 0}/${currentAccount.usage?.limit || 0}`);
 
-    currentToken = BEARER_TOKEN;
-    kiroClient = new KiroClient(BEARER_TOKEN, {
-      maxSockets: serverConfig.connectionPool.maxSockets,
-      maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
-      socketTimeout: serverConfig.connectionPool.socketTimeout,
-      timeout: serverConfig.connectionPool.requestTimeout
-    });
-    log('✅ Kiro 客户端初始化成功');
+      currentToken = BEARER_TOKEN;
+      kiroClient = new KiroClient(BEARER_TOKEN, {
+        maxSockets: serverConfig.connectionPool.maxSockets,
+        maxFreeSockets: serverConfig.connectionPool.maxFreeSockets,
+        socketTimeout: serverConfig.connectionPool.socketTimeout,
+        timeout: serverConfig.connectionPool.requestTimeout
+      });
+      log('✅ Kiro 客户端初始化成功');
 
-    // 检查是否需要立即刷新，否则设置定时器
-    const needsRefreshNow = accountNeedsRefresh(currentAccount, serverConfig.token.refreshBufferMinutes * 60);
+      // 检查是否需要立即刷新，否则设置定时器
+      const needsRefreshNow = accountNeedsRefresh(currentAccount, serverConfig.token.refreshBufferMinutes * 60);
 
-    if (needsRefreshNow) {
-      log('⚠️ Token 已过期或即将过期，立即刷新');
-      backgroundRefreshToken();
-    } else {
-      scheduleNextRefresh();
+      if (needsRefreshNow) {
+        log('⚠️ Token 已过期或即将过期，立即刷新');
+        backgroundRefreshToken();
+      } else {
+        scheduleNextRefresh();
+      }
+    } catch (accountError) {
+      // 没有可用账号时，服务器仍然启动，但 API 调用会返回错误
+      log('⚠️  没有可用的账号，服务器将以受限模式启动');
+      log('   提示: 请通过 Web 管理界面添加账号后，服务器会自动加载');
+      kiroClient = null;
+      currentAccount = null;
+      currentToken = null;
     }
   } catch (error) {
-    logError('Kiro 客户端初始化失败', error);
+    logError('服务器初始化失败', error);
     process.exit(1);
   }
 })();
@@ -890,6 +940,17 @@ app.post('/v1/messages', async (req, res) => {
   log(`请求体大小: ${JSON.stringify(req.body).length} 字节`);
   log('==========================================\n');
   
+  // 检查 Kiro 客户端是否已初始化
+  if (!kiroClient) {
+    return res.status(503).json({
+      type: 'error',
+      error: { 
+        type: 'service_unavailable', 
+        message: '服务暂不可用：没有配置可用的账号。请通过 Web 管理界面添加账号。' 
+      }
+    });
+  }
+  
   // 记录原始请求到单独的日志文件
   logRawRequest(req);
   
@@ -1130,6 +1191,11 @@ app.post('/v1/messages', async (req, res) => {
             images: images.length > 0 ? images : undefined
           });
           
+          // 请求成功，更新账号最后使用时间
+          if (currentAccount) {
+            updateAccountLastUsed(currentAccount.id);
+          }
+          
           // 请求成功，跳出循环
           break;
           
@@ -1360,6 +1426,11 @@ app.post('/v1/messages', async (req, res) => {
             }
           }
         });
+        
+        // 请求成功，更新账号最后使用时间
+        if (currentAccount) {
+          updateAccountLastUsed(currentAccount.id);
+        }
         
         // 请求成功，跳出循环
         break;

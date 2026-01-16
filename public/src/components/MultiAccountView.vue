@@ -45,6 +45,10 @@
             ☰
           </button>
         </div>
+
+        <button class="btn btn-primary" @click="showAddDialog = true" title="添加账号">
+          ➕ 添加账号
+        </button>
       </div>
     </div>
 
@@ -114,12 +118,20 @@
         @delete="deleteAccount"
       />
     </div>
+
+    <!-- 添加账号对话框 -->
+    <AddAccountDialog
+      v-if="showAddDialog"
+      @close="showAddDialog = false"
+      @success="loadAccounts"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import AccountCard from './AccountCard.vue'
+import AddAccountDialog from './AddAccountDialog.vue'
 import { useNotification } from '../composables/useNotification'
 
 const emit = defineEmits(['update-stats'])
@@ -133,6 +145,7 @@ const sortBy = ref('email')
 const viewMode = ref('grid')
 const loading = ref(false)
 const error = ref(null)
+const showAddDialog = ref(false)
 
 let refreshInterval = null
 

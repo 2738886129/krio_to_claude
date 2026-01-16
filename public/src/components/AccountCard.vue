@@ -56,13 +56,15 @@
         </button>
       </div>
 
-      <div class="account-quota">
-        <div class="quota-info">
-          <span class="quota-label">额度使用</span>
-          <span class="quota-value">
-            {{ (account.usage?.current || 0).toFixed(2) }} / {{ account.usage?.limit || 0 }}
-            ({{ percentUsed.toFixed(1) }}%)
-          </span>
+      <!-- 使用量概览 -->
+      <div class="usage-overview">
+        <div class="usage-header">
+          <span class="usage-title">总使用量</span>
+          <span class="usage-percent" :class="percentClass">{{ percentUsed.toFixed(1) }}% 已使用</span>
+        </div>
+        <div class="usage-total">
+          <span class="usage-current">{{ formatNumber(account.usage?.current || 0) }}</span>
+          <span class="usage-limit">/ {{ formatNumber(account.usage?.limit || 0) }}</span>
         </div>
         <div class="account-progress">
           <div
@@ -72,11 +74,56 @@
           ></div>
         </div>
       </div>
+
     </div>
 
     <!-- 详情区域 -->
     <div class="account-details" :class="{ show: showDetails }">
       <div class="account-details-inner">
+        <!-- 配额详情卡片 -->
+        <div class="quota-cards">
+          <!-- 主配额 -->
+          <div class="quota-card" :class="{ active: hasActiveMain }">
+            <div class="quota-card-header">
+              <span class="quota-dot main"></span>
+              <span class="quota-card-title">主配额</span>
+              <span v-if="hasActiveMain" class="quota-badge active">ACTIVE</span>
+            </div>
+            <div class="quota-card-value">
+              <span class="quota-current">{{ formatNumber(account.usage?.baseCurrent || 0) }}</span>
+              <span class="quota-max">/ {{ formatNumber(account.usage?.baseLimit || 0) }}</span>
+            </div>
+            <div class="quota-card-date">{{ formatResetDate(account.usage?.nextResetDate) }} 重置</div>
+          </div>
+
+          <!-- 免费试用 -->
+          <div class="quota-card" :class="{ active: hasActiveTrial }">
+            <div class="quota-card-header">
+              <span class="quota-dot trial"></span>
+              <span class="quota-card-title">免费试用</span>
+              <span v-if="hasActiveTrial" class="quota-badge active">ACTIVE</span>
+            </div>
+            <div class="quota-card-value">
+              <span class="quota-current">{{ formatNumber(account.usage?.freeTrialCurrent || 0) }}</span>
+              <span class="quota-max">/ {{ formatNumber(account.usage?.freeTrialLimit || 0) }}</span>
+            </div>
+            <div class="quota-card-date">{{ formatExpiryDate(account.usage?.freeTrialExpiry) }}</div>
+          </div>
+
+          <!-- 奖励总计 -->
+          <div class="quota-card">
+            <div class="quota-card-header">
+              <span class="quota-dot bonus"></span>
+              <span class="quota-card-title">奖励总计</span>
+            </div>
+            <div class="quota-card-value">
+              <span class="quota-current">{{ formatNumber(account.usage?.bonusCurrent || 0) }}</span>
+              <span class="quota-max">/ {{ formatNumber(account.usage?.bonusLimit || 0) }}</span>
+            </div>
+            <div class="quota-card-date">{{ account.usage?.activeBonusCount || 0 }} 个生效奖励</div>
+          </div>
+        </div>
+
         <div v-if="account.lastError" class="account-error-box">
           <div class="account-error-title">最后错误信息</div>
           <div class="account-error-message">{{ account.lastError }}</div>
@@ -99,7 +146,7 @@
           </div>
           <div class="info-item">
             <div class="info-label">剩余天数</div>
-            <div class="info-value">{{ account.subscription?.daysRemaining || '-' }} 天</div>
+            <div class="info-value">{{ account.subscription?.daysRemaining ?? '-' }} 天</div>
           </div>
         </div>
 
@@ -160,6 +207,54 @@ const progressClass = computed(() => {
   if (percentUsed.value > 50) return 'warning'
   return ''
 })
+
+const percentClass = computed(() => {
+  if (percentUsed.value > 80) return 'percent-danger'
+  if (percentUsed.value > 50) return 'percent-warning'
+  return 'percent-normal'
+})
+
+const hasActiveTrial = computed(() => {
+  const trialLimit = props.account.usage?.freeTrialLimit || 0
+  const trialCurrent = props.account.usage?.freeTrialCurrent || 0
+  const expiry = props.account.usage?.freeTrialExpiry
+  
+  if (trialLimit <= 0) return false
+  if (trialCurrent >= trialLimit) return false
+  if (expiry) {
+    const expiryDate = new Date(expiry)
+    if (expiryDate < new Date()) return false
+  }
+  return true
+})
+
+const hasActiveMain = computed(() => {
+  // 主配额激活条件：有主配额额度，且试用未激活
+  const baseLimit = props.account.usage?.baseLimit || 0
+  return baseLimit > 0 && !hasActiveTrial.value
+})
+
+const formatNumber = (num) => {
+  if (num === undefined || num === null) return '0'
+  if (Number.isInteger(num)) return num.toString()
+  return num.toFixed(1)
+}
+
+const formatResetDate = (dateStr) => {
+  if (!dateStr) return '-'
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return '-'
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+const formatExpiryDate = (dateStr) => {
+  if (!dateStr) return '无试用'
+  const date = new Date(dateStr)
+  if (isNaN(date.getTime())) return '无试用'
+  const now = new Date()
+  if (date < now) return '已过期'
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} 过期`
+}
 
 const testButtonText = computed(() => {
   switch (testingStatus.value) {

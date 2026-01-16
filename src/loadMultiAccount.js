@@ -49,7 +49,8 @@ function loadAccountsConfig() {
     return JSON.parse(data);
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw new Error(`多账号配置文件不存在: ${ACCOUNTS_PATH}`);
+      // 文件不存在时返回空配置，允许程序继续运行
+      return { version: '1.0.0', accounts: [], groups: [], tags: [] };
     }
     throw new Error(`读取多账号配置失败: ${error.message}`);
   }
@@ -278,6 +279,22 @@ function updateAccountUsage(accountId, usage) {
 }
 
 /**
+ * 更新账号的最后使用时间
+ * @param {string} accountId - 账号 ID
+ */
+function updateAccountLastUsed(accountId) {
+  const config = loadAccountsConfig();
+  const accountIndex = config.accounts.findIndex(acc => acc.id === accountId);
+  
+  if (accountIndex === -1) {
+    return;
+  }
+  
+  config.accounts[accountIndex].lastUsedAt = Date.now();
+  saveAccountsConfig(config);
+}
+
+/**
  * 标记账号为错误状态
  * @param {string} accountId - 账号 ID
  * @param {string} errorMessage - 错误消息
@@ -391,6 +408,7 @@ module.exports = {
   getAccountToken,
   getBestAccountToken,
   updateAccountUsage,
+  updateAccountLastUsed,
   markAccountError,
   shouldSwitchAccount,
   switchToNextAccount

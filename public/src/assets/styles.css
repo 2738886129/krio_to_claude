@@ -785,7 +785,157 @@ td {
   }
 }
 
-/* 账号额度展示 */
+/* 账号额度展示 - 新版使用量概览 */
+.usage-overview {
+  margin-top: 16px;
+  padding: 16px;
+  background: #f9fafb;
+  border-radius: 12px;
+}
+
+.usage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.usage-title {
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.usage-percent {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.usage-percent.percent-normal {
+  color: #059669;
+  background: #d1fae5;
+}
+
+.usage-percent.percent-warning {
+  color: #d97706;
+  background: #fef3c7;
+}
+
+.usage-percent.percent-danger {
+  color: #dc2626;
+  background: #fee2e2;
+}
+
+.usage-total {
+  margin-bottom: 8px;
+}
+
+.usage-current {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.usage-limit {
+  font-size: 18px;
+  color: #9ca3af;
+  margin-left: 4px;
+}
+
+/* 配额详情卡片 */
+.quota-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.quota-card {
+  padding: 14px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  transition: all 0.2s;
+}
+
+.quota-card:hover {
+  border-color: #d1d5db;
+  background: #f3f4f6;
+}
+
+.quota-card.active {
+  border-color: #a5b4fc;
+  background: #eef2ff;
+}
+
+.quota-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.quota-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.quota-dot.main {
+  background: #3b82f6;
+}
+
+.quota-dot.trial {
+  background: #8b5cf6;
+}
+
+.quota-dot.bonus {
+  background: #9ca3af;
+}
+
+.quota-card-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.quota-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+}
+
+.quota-badge.active {
+  color: #4f46e5;
+  background: #c7d2fe;
+  border: 1px solid #a5b4fc;
+}
+
+.quota-card-value {
+  margin-bottom: 6px;
+}
+
+.quota-current {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.quota-max {
+  font-size: 14px;
+  color: #9ca3af;
+  margin-left: 2px;
+}
+
+.quota-card-date {
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* 旧版额度展示（保留兼容） */
 .account-quota {
   margin-top: 16px;
 }
@@ -847,6 +997,10 @@ td {
   padding: 20px;
   background: #f9fafb;
   border-top: 1px solid #e5e7eb;
+}
+
+.account-details-inner .quota-cards {
+  margin-bottom: 16px;
 }
 
 .account-error-box {
@@ -964,6 +1118,19 @@ td {
   margin-top: 0;
 }
 
+.account-card.list-view .usage-overview {
+  margin-top: 0;
+  padding: 12px;
+}
+
+.account-card.list-view .usage-current {
+  font-size: 24px;
+}
+
+.account-card.list-view .usage-limit {
+  font-size: 14px;
+}
+
 .account-card.list-view .account-badges {
   flex: 0 0 auto;
 }
@@ -1026,6 +1193,18 @@ td {
   .account-card.list-view .account-quota {
     width: 100%;
     margin-top: 12px;
+  }
+
+  .quota-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-current {
+    font-size: 26px;
+  }
+
+  .usage-limit {
+    font-size: 16px;
   }
 
   .account-info-grid {
